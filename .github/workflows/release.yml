@@ -1,0 +1,66 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to release (e.g. v0.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: verify and publish release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve version
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+          echo "releasing tag $TAG"
+
+      - name: Verify (compile + protocol smoke)
+        run: |
+          python3 -m py_compile nfsd.py
+          python3 test/rpcsmoke.py
+
+      - name: Stage artifacts
+        run: |
+          mkdir -p dist
+          # stable asset name: /releases/latest/download/nfsd.py always
+          # fetches the current single-file server
+          cp nfsd.py dist/nfsd.py
+          (cd dist && sha256sum nfsd.py > nfsd.py.sha256)
+          ls -la dist
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PRERELEASE=""
+          case "$TAG" in
+            *-*) PRERELEASE="--prerelease" ;;
+          esac
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists, uploading assets"
+            gh release upload "$TAG" \
+              dist/nfsd.py \
+              dist/nfsd.py.sha256 \
+              --clobber
+          else
+            gh release create "$TAG" \
+              dist/nfsd.py \
+              dist/nfsd.py.sha256 \
+              --title "nfsd.py ${VERSION}" \
+              --generate-notes \
+              --verify-tag \
+              $PRERELEASE
+          fi
