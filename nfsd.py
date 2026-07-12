@@ -1004,6 +1004,16 @@ class State(object):
             else:
                 self.locks.pop(ino, None)
 
+    def _expire_if_dead_locked(self, clientid):
+        """Courteous server (RFC 7530 sec 9.6.3): keep an expired client's
+        state around until it actually blocks someone else, then reap it.
+        Returns True if the client's lease had run out and it was purged."""
+        c = self.clients.get(clientid)
+        if c is not None and time.monotonic() - c.last_renew <= self.lease:
+            return False
+        self._purge_client_locked(clientid)
+        return True
+
     def _new_other(self):
         n = self.next_state
         self.next_state += 1
@@ -1146,19 +1156,29 @@ class State(object):
         # deny must not hit any existing access -- INCLUDING the same owner's
         # own prior share (RFC 7530 sec 9.9 / 15.22.5).
         with self.lock:
-            for o in self.opens.values():
-                if o.ino != ino:
-                    continue
-                if (access & o.deny) or (deny & o.access):
-                    return True
-            return False
+            while True:
+                for o in self.opens.values():
+                    if o.ino != ino:
+                        continue
+                    if (access & o.deny) or (deny & o.access):
+                        if self._expire_if_dead_locked(o.owner_key[0]):
+                            break    # purge mutated self.opens: rescan
+                        return True
+                else:
+                    return False
 
     def io_deny_conflict(self, ino, writing):
         """True if an anonymous READ/WRITE is blocked by some open's deny."""
         want = OPEN4_SHARE_DENY_WRITE if writing else OPEN4_SHARE_DENY_READ
         with self.lock:
-            return any(o.ino == ino and (o.deny & want)
-                       for o in self.opens.values())
+            while True:
+                for o in self.opens.values():
+                    if o.ino == ino and (o.deny & want):
+                        if self._expire_if_dead_locked(o.owner_key[0]):
+                            break    # purge mutated self.opens: rescan
+                        return True
+                else:
+                    return False
 
     # -- opens -----------------------------------------------------------
     def open_file(self, clientid, owner_bytes, ino, access, deny, opener_uid):
@@ -1218,14 +1238,18 @@ class State(object):
         want_write = locktype in (WRITE_LT, WRITEW_LT)
         start, end = self._range(offset, length)
         with self.lock:
-            for r_owner, r_type, r_start, r_end in self.locks.get(ino, ()):
-                if r_owner == owner:
-                    continue
-                if r_start >= end or r_end <= start:
-                    continue
-                if want_write or r_type in (WRITE_LT, WRITEW_LT):
-                    return (r_start, r_end, r_type, r_owner)
-        return None
+            while True:
+                for r_owner, r_type, r_start, r_end in self.locks.get(ino, ()):
+                    if r_owner == owner:
+                        continue
+                    if r_start >= end or r_end <= start:
+                        continue
+                    if want_write or r_type in (WRITE_LT, WRITEW_LT):
+                        if self._expire_if_dead_locked(r_owner[0]):
+                            break    # purge mutated self.locks: rescan
+                        return (r_start, r_end, r_type, r_owner)
+                else:
+                    return None
 
     def lock_range(self, ino, owner, offset, length, locktype):
         """Upsert semantics per RFC 7530: a lock by the same owner replaces
@@ -1413,7 +1437,7 @@ class NfsServer(object):
         self.anon_gid = anon_gid
         self.imap = InodeMap(root)
         self.cache = FileCache()
-        self.state = State()
+        self.state = State(lease)
         self.side = SideMeta(anon_uid, anon_gid)
         self.write_verf = os.urandom(8)
         self.symlink_ok = self._probe_symlink()
