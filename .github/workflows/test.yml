@@ -2,8 +2,18 @@ name: test
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ '**' ]
+    paths:
+      - 'nfsd.py'
+      - 'test/**'
+      - '.github/workflows/test.yml'
+      - '.gitattributes'
   pull_request:
+    paths:
+      - 'nfsd.py'
+      - 'test/**'
+      - '.github/workflows/test.yml'
+      - '.gitattributes'
   workflow_dispatch:
 
 permissions:
