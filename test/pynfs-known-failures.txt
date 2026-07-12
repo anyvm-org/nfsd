@@ -1,77 +1,13 @@
 # Known pynfs NFSv4.0 servertests failures for nfsd.py.
 #
-# These are the accepted conformance gaps: nfsd.py does not implement the
-# strict NFSv4.0 open-owner/lock-owner seqid state machine (BAD_SEQID
-# enforcement), stateid generation numbers (OLD_STATEID/STALE_STATEID
-# distinctions), the at-most-once replay cache, some SETCLIENTID callback
-# nuances, or READDIR cookie verifiers. The Linux/macOS kernel clients do
-# not depend on any of these for normal operation over TCP.
+# This list is EMPTY: nfsd.py currently passes every applicable test of the
+# pynfs NFSv4.0 servertests suite (589 passed, 0 failed, 2 warned,
+# 10 skipped of 601 selected; pynfs master, verified in CI 2026-07-12).
+#
+# The 2 warnings are POSIX-advisory (e.g. LOCK4 write-locking a read-mode
+# file) and the 10 skips are tests the suite itself deems inapplicable.
 #
 # test/conformance.sh fails CI when a test NOT in this list fails
 # (regression), and prints a note when a listed test starts passing
-# (tighten this list by removing it).
-#
-# Baseline: 534 passed / 50 failed / 7 warned of 601 (pynfs master,
-# 2026-07-12).
-
-# SETCLIENTID / clientid lifecycle nuances
-CID1
-CID2a
-CID4c
-CID4d
-CID4e
-
-# open-owner seqid enforcement (BAD_SEQID) and stateid generations
-CLOSE3
-CLOSE5
-CLOSE6
-CLOSE8
-CLOSE9
-CLOSE10
-CLOSE12
-OPCF4
-OPCF6
-OPDG2
-OPDG3
-OPDG4
-OPDG6
-OPDG7
-OPEN18
-OPEN21
-OPEN22
-OPEN23
-OPEN25
-OPEN26
-OPEN27
-OPEN30
-OPEN31
-
-# stale/old stateid distinctions on READ/WRITE
-RD10
-RD11
-WRT9
-WRT11
-WRT12
-WRT19
-
-# lock-owner seqid enforcement and lock stateid generations
-LOCK8a
-LOCK8b
-LOCK9a
-LOCK9b
-LOCK9c
-LOCK10
-LOCK13
-LKU6
-LKU6b
-LKU7
-
-# at-most-once replay cache
-RPLY9
-RPLY10
-RPLY11
-RPLY14
-
-# READDIR cookie verifier semantics
-RDDR11
-RDDR12
+# (tighten this list by removing it). If a genuine, accepted gap ever
+# appears, add its test code (one per line) with a comment explaining why.

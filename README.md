@@ -1,5 +1,9 @@
 # nfsd.py
 
+[![test](https://github.com/anyvm-org/nfsd/actions/workflows/test.yml/badge.svg)](https://github.com/anyvm-org/nfsd/actions/workflows/test.yml)
+[![pynfs conformance](https://img.shields.io/badge/pynfs%20NFSv4.0-589%20passed%2C%200%20failed-brightgreen)](test/pynfs-known-failures.txt)
+[![python](https://img.shields.io/badge/python-3.8%2B%20stdlib%20only-blue)](nfsd.py)
+
 A cross-platform, **user-space NFSv4.0 server in one pure-Python file**.
 Point it at a local directory and a TCP port, and any NFSv4.0 client can
 mount it.
@@ -98,13 +102,14 @@ the acceptance harness:
 bash test/conformance.sh      # clones/builds pynfs, runs 600+ tests
 ```
 
-Current standing: **534 passed / 50 failed / 7 warned of 601 executed**,
-zero server crashes or hangs. Every remaining failure is catalogued in
-`test/pynfs-known-failures.txt` and belongs to one deliberate gap: the
-strict NFSv4.0 seqid state machine (open/lock-owner BAD_SEQID enforcement,
-OLD_STATEID/STALE_STATEID generations, the at-most-once replay cache,
-SETCLIENTID callback nuances, READDIR cookie verifiers). Kernel clients on
-TCP do not depend on these for normal operation.
+Current standing: **589 passed / 0 failed / 2 warned / 10 skipped of the
+601 selected tests**, zero server crashes or hangs. This includes the
+strict NFSv4.0 state machine: open/lock-owner seqid enforcement with the
+at-most-once replay cache (BAD_SEQID), stateid generations
+(OLD_STATEID/STALE_STATEID), share reservations, an RPC duplicate-request
+cache, and courteous-server lease expiry (an expired client's state is
+reaped when it conflicts). The 2 warnings are POSIX-advisory; the 10
+skips are tests the suite itself deems inapplicable.
 
 CI treats that file as a baseline: any conformance failure not listed there
 fails the build; a listed test that starts passing is reported so the
@@ -137,5 +142,4 @@ included) and replaces the generated block in `nfsd.py`.
   *client* cannot mount this; it is v2/v3 only). No delegations, no
   Kerberos (AUTH_SYS trusts client-asserted uid/gid, standard LAN model).
 - No cross-restart handle persistence; no grace-period reclaim.
-- Open-owner seqid replay detection is not implemented (fine over TCP).
 - ACLs are not supported (mode bits only).
