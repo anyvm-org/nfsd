@@ -5330,27 +5330,54 @@ def main(argv=None):
     srv.server_activate()
     srv.nfs = nfs
 
+    def pmap_bind(cls, handler, bind_addr):
+        ps = cls((bind_addr, args.pmap_port), handler,
+                 bind_and_activate=False)
+        if ":" in bind_addr:
+            ps.address_family = socket.AF_INET6
+            ps.socket = socket.socket(ps.address_family, ps.socket_type)
+        try:
+            ps.server_bind()
+            ps.server_activate()
+        except OSError:
+            ps.server_close()
+            raise
+        return ps
+
     pmap_srvs = []
     if args.pmap:
         # tcp AND udp: BSD mount_nfs sends GETPORT over UDP even for -T
         # (TCP) mounts, while some clients query over TCP.
         for cls, handler, proto in ((Server, ConnHandler, "tcp"),
                                     (UdpServer, UdpHandler, "udp")):
+            ps = None
             try:
-                ps = cls((args.bind, args.pmap_port), handler,
-                         bind_and_activate=False)
-                if ":" in args.bind:
-                    ps.address_family = socket.AF_INET6
-                    ps.socket = socket.socket(ps.address_family,
-                                              ps.socket_type)
-                ps.server_bind()
-                ps.server_activate()
+                ps = pmap_bind(cls, handler, args.bind)
             except OSError as e:
-                sys.stdout.write("portmapper: cannot bind %s port %d (%s);"
-                                 " v3 clients relying on the portmapper"
-                                 " will not find the server\n"
-                                 % (proto, args.pmap_port, e))
-                continue
+                if (isinstance(e, PermissionError)
+                        and args.bind not in ("", "0.0.0.0", "::")):
+                    # macOS 10.14+ allows unprivileged binds below port
+                    # 1024 ONLY on the wildcard address; a specific -bind
+                    # (e.g. 127.0.0.1) still needs root there. The
+                    # portmapper only reveals port numbers, so retrying on
+                    # the wildcard exposes nothing that matters -- the NFS
+                    # service itself stays on the requested bind address.
+                    try:
+                        ps = pmap_bind(cls, handler, "0.0.0.0")
+                        sys.stdout.write(
+                            "portmapper: %s port %d bound on 0.0.0.0"
+                            " (binding %s needs root on this platform)\n"
+                            % (proto, args.pmap_port, args.bind))
+                    except OSError as e2:
+                        e = e2
+                        ps = None
+                if ps is None:
+                    sys.stdout.write(
+                        "portmapper: cannot bind %s port %d (%s);"
+                        " v3 clients relying on the portmapper"
+                        " will not find the server\n"
+                        % (proto, args.pmap_port, e))
+                    continue
             ps.nfs = nfs
             pmap_srvs.append((ps, proto))
 
