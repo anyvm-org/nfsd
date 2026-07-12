@@ -1,6 +1,7 @@
 #!/bin/bash
 # End-to-end test for nfsd.py: start the server, mount it with the kernel
-# NFS client (vers=4.0), exercise reads/writes/metadata, report PASS/FAIL.
+# NFS client (vers=4.0), exercise reads/writes/metadata, then re-mount with
+# vers=4.1 (sessions) and exercise the same core paths. Reports PASS/FAIL.
 # Needs: linux (or WSL2), python3, nfs-common, passwordless sudo.
 #
 # usage: bash test/e2e.sh [path-to-nfsd.py] [port]
@@ -136,6 +137,28 @@ n=$(ls "$MNT/bigdir" | wc -l)
 
 # --- df ---
 sudo df "$MNT" > /dev/null; check $? "statfs (df)"
+
+# --- NFSv4.1 (sessions) re-mount ---
+sudo umount "$MNT"; check $? "umount vers=4.0"
+timeout 30 sudo mount -t nfs \
+  -o "vers=4.1,port=$PORT,proto=tcp,sec=sys,soft,timeo=50,retrans=2" \
+  "127.0.0.1:/" "$MNT"
+check $? "mount vers=4.1"
+grep " $(echo "$MNT" | sed 's/[.[\*^$]/\\&/g') " /proc/mounts \
+  | grep -q "vers=4.1"; check $? "negotiated vers=4.1"
+[ "$(cat "$MNT/hello.txt" 2>/dev/null)" = "hello from nfsd.py" ]
+check $? "4.1 read"
+echo "via sessions" | sudo tee "$MNT/w41.txt" > /dev/null
+[ "$(cat "$EXP/w41.txt" 2>/dev/null)" = "via sessions" ]
+check $? "4.1 write"
+sudo cp /tmp/nfsdpy-rnd.bin "$MNT/rnd41.bin"
+a41=$(sha256sum /tmp/nfsdpy-rnd.bin | awk '{print $1}')
+b41=$(sudo sha256sum "$MNT/rnd41.bin" | awk '{print $1}')
+[ "$a41" = "$b41" ]; check $? "4.1 8 MiB sha256 round-trip"
+sudo chmod 0640 "$MNT/w41.txt"
+[ "$(sudo stat -c %a "$MNT/w41.txt")" = "640" ]; check $? "4.1 chmod"
+sudo flock -n -x "$MNT/w41.txt" -c true; check $? "4.1 flock"
+sudo rm "$MNT/w41.txt" "$MNT/rnd41.bin"; check $? "4.1 unlink"
 
 echo
 echo "=== RESULT: $PASS passed, $FAIL failed ==="

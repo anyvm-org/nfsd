@@ -38,6 +38,7 @@ log = logging.getLogger("nfsd")
 # === BEGIN GENERATED CONSTANTS (tools/gen_constants.py; DO NOT EDIT) ===
 # Machine-extracted from the IETF specifications:
 #   RFC 7531 (NFSv4.0 XDR)  -> spec/rfc7531.txt
+#   RFC 5662 (NFSv4.1 XDR)  -> spec/rfc5662.txt (4.1-new names only)
 #   RFC 5531 (ONC RPC v2)   -> spec/rfc5531.txt
 # Regenerate with: python3 tools/gen_constants.py --splice nfsd.py
 
@@ -354,6 +355,275 @@ NFS_CB = 1
 CB_NULL = 0
 CB_COMPOUND = 1
 
+# --- RFC 5662 top-level consts (NFSv4.1-new) ---
+NFS4_SESSIONID_SIZE = 16
+NFS4_MAXFILELEN = 18446744073709551615
+NFS4_MAXFILEOFF = 18446744073709551614
+ACE4_INHERITED_ACE = 128
+ACE4_WRITE_RETENTION = 512
+ACE4_WRITE_RETENTION_HOLD = 1024
+ACL4_AUTO_INHERIT = 1
+ACL4_PROTECTED = 2
+ACL4_DEFAULTED = 4
+NFS4_DEVICEID4_SIZE = 16
+LAYOUT4_RET_REC_FILE = 1
+LAYOUT4_RET_REC_FSID = 2
+LAYOUT4_RET_REC_ALL = 3
+TH4_READ_SIZE = 0
+TH4_WRITE_SIZE = 1
+TH4_READ_IOSIZE = 2
+TH4_WRITE_IOSIZE = 3
+RET4_DURATION_INFINITE = 18446744073709551615
+FSCHARSET_CAP4_CONTAINS_NON_UTF8 = 1
+FSCHARSET_CAP4_ALLOWS_ONLY_UTF8 = 2
+FATTR4_SUPPATTR_EXCLCREAT = 75
+FATTR4_DIR_NOTIF_DELAY = 56
+FATTR4_DIRENT_NOTIF_DELAY = 57
+FATTR4_DACL = 58
+FATTR4_SACL = 59
+FATTR4_CHANGE_POLICY = 60
+FATTR4_FS_STATUS = 61
+FATTR4_FS_LAYOUT_TYPES = 62
+FATTR4_LAYOUT_HINT = 63
+FATTR4_LAYOUT_TYPES = 64
+FATTR4_LAYOUT_BLKSIZE = 65
+FATTR4_LAYOUT_ALIGNMENT = 66
+FATTR4_FS_LOCATIONS_INFO = 67
+FATTR4_MDSTHRESHOLD = 68
+FATTR4_RETENTION_GET = 69
+FATTR4_RETENTION_SET = 70
+FATTR4_RETENTEVT_GET = 71
+FATTR4_RETENTEVT_SET = 72
+FATTR4_RETENTION_HOLD = 73
+FATTR4_MODE_SET_MASKED = 74
+FATTR4_FS_CHARSET_CAP = 76
+FSLI4BX_GFLAGS = 0
+FSLI4BX_TFLAGS = 1
+FSLI4BX_CLSIMUL = 2
+FSLI4BX_CLHANDLE = 3
+FSLI4BX_CLFILEID = 4
+FSLI4BX_CLWRITEVER = 5
+FSLI4BX_CLCHANGE = 6
+FSLI4BX_CLREADDIR = 7
+FSLI4BX_READRANK = 8
+FSLI4BX_WRITERANK = 9
+FSLI4BX_READORDER = 10
+FSLI4BX_WRITEORDER = 11
+FSLI4GF_WRITABLE = 1
+FSLI4GF_CUR_REQ = 2
+FSLI4GF_ABSENT = 4
+FSLI4GF_GOING = 8
+FSLI4GF_SPLIT = 16
+FSLI4TF_RDMA = 1
+FSLI4IF_VAR_SUB = 1
+NFL4_UFLG_MASK = 63
+NFL4_UFLG_DENSE = 1
+NFL4_UFLG_COMMIT_THRU_MDS = 2
+NFL4_UFLG_STRIPE_UNIT_SIZE_MASK = 4294967232
+OPEN4_SHARE_ACCESS_WANT_DELEG_MASK = 65280
+OPEN4_SHARE_ACCESS_WANT_NO_PREFERENCE = 0
+OPEN4_SHARE_ACCESS_WANT_READ_DELEG = 256
+OPEN4_SHARE_ACCESS_WANT_WRITE_DELEG = 512
+OPEN4_SHARE_ACCESS_WANT_ANY_DELEG = 768
+OPEN4_SHARE_ACCESS_WANT_NO_DELEG = 1024
+OPEN4_SHARE_ACCESS_WANT_CANCEL = 1280
+OPEN4_SHARE_ACCESS_WANT_SIGNAL_DELEG_WHEN_RESRC_AVAIL = 65536
+OPEN4_SHARE_ACCESS_WANT_PUSH_DELEG_WHEN_UNCONTENDED = 131072
+OPEN4_RESULT_PRESERVE_UNLINKED = 8
+OPEN4_RESULT_MAY_NOTIFY_LOCK = 32
+EXCHGID4_FLAG_SUPP_MOVED_REFER = 1
+EXCHGID4_FLAG_SUPP_MOVED_MIGR = 2
+EXCHGID4_FLAG_BIND_PRINC_STATEID = 256
+EXCHGID4_FLAG_USE_NON_PNFS = 65536
+EXCHGID4_FLAG_USE_PNFS_MDS = 131072
+EXCHGID4_FLAG_USE_PNFS_DS = 262144
+EXCHGID4_FLAG_MASK_PNFS = 458752
+EXCHGID4_FLAG_UPD_CONFIRMED_REC_A = 1073741824
+EXCHGID4_FLAG_CONFIRMED_R = 2147483648
+CREATE_SESSION4_FLAG_PERSIST = 1
+CREATE_SESSION4_FLAG_CONN_BACK_CHAN = 2
+CREATE_SESSION4_FLAG_CONN_RDMA = 4
+SEQ4_STATUS_CB_PATH_DOWN = 1
+SEQ4_STATUS_CB_GSS_CONTEXTS_EXPIRING = 2
+SEQ4_STATUS_CB_GSS_CONTEXTS_EXPIRED = 4
+SEQ4_STATUS_EXPIRED_ALL_STATE_REVOKED = 8
+SEQ4_STATUS_EXPIRED_SOME_STATE_REVOKED = 16
+SEQ4_STATUS_ADMIN_STATE_REVOKED = 32
+SEQ4_STATUS_RECALLABLE_STATE_REVOKED = 64
+SEQ4_STATUS_LEASE_MOVED = 128
+SEQ4_STATUS_RESTART_RECLAIM_NEEDED = 256
+SEQ4_STATUS_CB_PATH_DOWN_SESSION = 512
+SEQ4_STATUS_BACKCHANNEL_FAULT = 1024
+SEQ4_STATUS_DEVID_CHANGED = 2048
+SEQ4_STATUS_DEVID_DELETED = 4096
+RCA4_TYPE_MASK_RDATA_DLG = 0
+RCA4_TYPE_MASK_WDATA_DLG = 1
+RCA4_TYPE_MASK_DIR_DLG = 2
+RCA4_TYPE_MASK_FILE_LAYOUT = 3
+RCA4_TYPE_MASK_BLK_LAYOUT = 4
+RCA4_TYPE_MASK_OBJ_LAYOUT_MIN = 8
+RCA4_TYPE_MASK_OBJ_LAYOUT_MAX = 9
+RCA4_TYPE_MASK_OTHER_LAYOUT_MIN = 12
+RCA4_TYPE_MASK_OTHER_LAYOUT_MAX = 15
+
+# --- RFC 5662 enum nfsstat4 (NFSv4.1-new members) ---
+NFS4ERR_BADIOMODE = 10049
+NFS4ERR_BADLAYOUT = 10050
+NFS4ERR_BAD_SESSION_DIGEST = 10051
+NFS4ERR_BADSESSION = 10052
+NFS4ERR_BADSLOT = 10053
+NFS4ERR_COMPLETE_ALREADY = 10054
+NFS4ERR_CONN_NOT_BOUND_TO_SESSION = 10055
+NFS4ERR_DELEG_ALREADY_WANTED = 10056
+NFS4ERR_BACK_CHAN_BUSY = 10057
+NFS4ERR_LAYOUTTRYLATER = 10058
+NFS4ERR_LAYOUTUNAVAILABLE = 10059
+NFS4ERR_NOMATCHING_LAYOUT = 10060
+NFS4ERR_RECALLCONFLICT = 10061
+NFS4ERR_UNKNOWN_LAYOUTTYPE = 10062
+NFS4ERR_SEQ_MISORDERED = 10063
+NFS4ERR_SEQUENCE_POS = 10064
+NFS4ERR_REQ_TOO_BIG = 10065
+NFS4ERR_REP_TOO_BIG = 10066
+NFS4ERR_REP_TOO_BIG_TO_CACHE = 10067
+NFS4ERR_RETRY_UNCACHED_REP = 10068
+NFS4ERR_UNSAFE_COMPOUND = 10069
+NFS4ERR_TOO_MANY_OPS = 10070
+NFS4ERR_OP_NOT_IN_SESSION = 10071
+NFS4ERR_HASH_ALG_UNSUPP = 10072
+NFS4ERR_CLIENTID_BUSY = 10074
+NFS4ERR_PNFS_IO_HOLE = 10075
+NFS4ERR_SEQ_FALSE_RETRY = 10076
+NFS4ERR_BAD_HIGH_SLOT = 10077
+NFS4ERR_DEADSESSION = 10078
+NFS4ERR_ENCR_ALG_UNSUPP = 10079
+NFS4ERR_PNFS_NO_LAYOUT = 10080
+NFS4ERR_NOT_ONLY_OP = 10081
+NFS4ERR_WRONG_CRED = 10082
+NFS4ERR_WRONG_TYPE = 10083
+NFS4ERR_DIRDELEG_UNAVAIL = 10084
+NFS4ERR_REJECT_DELEG = 10085
+NFS4ERR_RETURNCONFLICT = 10086
+NFS4ERR_DELEG_REVOKED = 10087
+
+# --- RFC 5662 enum layouttype4 (NFSv4.1-new members) ---
+LAYOUT4_NFSV4_1_FILES = 1
+LAYOUT4_OSD2_OBJECTS = 2
+LAYOUT4_BLOCK_VOLUME = 3
+
+# --- RFC 5662 enum layoutiomode4 (NFSv4.1-new members) ---
+LAYOUTIOMODE4_READ = 1
+LAYOUTIOMODE4_RW = 2
+LAYOUTIOMODE4_ANY = 3
+
+# --- RFC 5662 enum fs4_status_type (NFSv4.1-new members) ---
+STATUS4_FIXED = 1
+STATUS4_UPDATED = 2
+STATUS4_VERSIONED = 3
+STATUS4_WRITABLE = 4
+STATUS4_REFERRAL = 5
+
+# --- RFC 5662 enum ssv_subkey4 (NFSv4.1-new members) ---
+SSV4_SUBKEY_MIC_I2T = 1
+SSV4_SUBKEY_MIC_T2I = 2
+SSV4_SUBKEY_SEAL_I2T = 3
+SSV4_SUBKEY_SEAL_T2I = 4
+
+# --- RFC 5662 enum filelayout_hint_care4 (NFSv4.1-new members) ---
+NFLH4_CARE_STRIPE_UNIT_SIZE = 64
+NFLH4_CARE_STRIPE_COUNT = 128
+
+# --- RFC 5662 enum createmode4 (NFSv4.1-new members) ---
+EXCLUSIVE4_1 = 3
+
+# --- RFC 5662 enum open_delegation_type4 (NFSv4.1-new members) ---
+OPEN_DELEGATE_NONE_EXT = 3
+
+# --- RFC 5662 enum open_claim_type4 (NFSv4.1-new members) ---
+CLAIM_FH = 4
+CLAIM_DELEG_CUR_FH = 5
+CLAIM_DELEG_PREV_FH = 6
+
+# --- RFC 5662 enum why_no_delegation4 (NFSv4.1-new members) ---
+WND4_NOT_WANTED = 0
+WND4_CONTENTION = 1
+WND4_RESOURCE = 2
+WND4_NOT_SUPP_FTYPE = 3
+WND4_WRITE_DELEG_NOT_SUPP_FTYPE = 4
+WND4_NOT_SUPP_UPGRADE = 5
+WND4_NOT_SUPP_DOWNGRADE = 6
+WND4_CANCELLED = 7
+WND4_IS_DIR = 8
+
+# --- RFC 5662 enum channel_dir_from_client4 (NFSv4.1-new members) ---
+CDFC4_FORE = 1
+CDFC4_BACK = 2
+CDFC4_FORE_OR_BOTH = 3
+CDFC4_BACK_OR_BOTH = 7
+
+# --- RFC 5662 enum channel_dir_from_server4 (NFSv4.1-new members) ---
+CDFS4_FORE = 1
+CDFS4_BACK = 2
+CDFS4_BOTH = 3
+
+# --- RFC 5662 enum state_protect_how4 (NFSv4.1-new members) ---
+SP4_NONE = 0
+SP4_MACH_CRED = 1
+SP4_SSV = 2
+
+# --- RFC 5662 enum gddrnf4_status (NFSv4.1-new members) ---
+GDD4_OK = 0
+GDD4_UNAVAIL = 1
+
+# --- RFC 5662 enum secinfo_style4 (NFSv4.1-new members) ---
+SECINFO_STYLE4_CURRENT_FH = 0
+SECINFO_STYLE4_PARENT = 1
+
+# --- RFC 5662 enum nfs_opnum4 (NFSv4.1-new members) ---
+OP_BACKCHANNEL_CTL = 40
+OP_BIND_CONN_TO_SESSION = 41
+OP_EXCHANGE_ID = 42
+OP_CREATE_SESSION = 43
+OP_DESTROY_SESSION = 44
+OP_FREE_STATEID = 45
+OP_GET_DIR_DELEGATION = 46
+OP_GETDEVICEINFO = 47
+OP_GETDEVICELIST = 48
+OP_LAYOUTCOMMIT = 49
+OP_LAYOUTGET = 50
+OP_LAYOUTRETURN = 51
+OP_SECINFO_NO_NAME = 52
+OP_SEQUENCE = 53
+OP_SET_SSV = 54
+OP_TEST_STATEID = 55
+OP_WANT_DELEGATION = 56
+OP_DESTROY_CLIENTID = 57
+OP_RECLAIM_COMPLETE = 58
+
+# --- RFC 5662 enum notify_type4 (NFSv4.1-new members) ---
+NOTIFY4_CHANGE_CHILD_ATTRS = 0
+NOTIFY4_CHANGE_DIR_ATTRS = 1
+NOTIFY4_REMOVE_ENTRY = 2
+NOTIFY4_ADD_ENTRY = 3
+NOTIFY4_RENAME_ENTRY = 4
+NOTIFY4_CHANGE_COOKIE_VERIFIER = 5
+
+# --- RFC 5662 enum notify_deviceid_type4 (NFSv4.1-new members) ---
+NOTIFY_DEVICEID4_CHANGE = 1
+NOTIFY_DEVICEID4_DELETE = 2
+
+# --- RFC 5662 enum nfs_cb_opnum4 (NFSv4.1-new members) ---
+OP_CB_LAYOUTRECALL = 5
+OP_CB_NOTIFY = 6
+OP_CB_PUSH_DELEG = 7
+OP_CB_RECALL_ANY = 8
+OP_CB_RECALLABLE_OBJ_AVAIL = 9
+OP_CB_RECALL_SLOT = 10
+OP_CB_SEQUENCE = 11
+OP_CB_WANTS_CANCELLED = 12
+OP_CB_NOTIFY_LOCK = 13
+OP_CB_NOTIFY_DEVICEID = 14
+
 # --- RFC 5531 enum auth_flavor ---
 AUTH_NONE = 0
 AUTH_SYS = 1
@@ -465,6 +735,44 @@ NFSSTAT4_NAMES = {
     10046: 'NFS4ERR_FILE_OPEN',
     10047: 'NFS4ERR_ADMIN_REVOKED',
     10048: 'NFS4ERR_CB_PATH_DOWN',
+    10049: 'NFS4ERR_BADIOMODE',
+    10050: 'NFS4ERR_BADLAYOUT',
+    10051: 'NFS4ERR_BAD_SESSION_DIGEST',
+    10052: 'NFS4ERR_BADSESSION',
+    10053: 'NFS4ERR_BADSLOT',
+    10054: 'NFS4ERR_COMPLETE_ALREADY',
+    10055: 'NFS4ERR_CONN_NOT_BOUND_TO_SESSION',
+    10056: 'NFS4ERR_DELEG_ALREADY_WANTED',
+    10057: 'NFS4ERR_BACK_CHAN_BUSY',
+    10058: 'NFS4ERR_LAYOUTTRYLATER',
+    10059: 'NFS4ERR_LAYOUTUNAVAILABLE',
+    10060: 'NFS4ERR_NOMATCHING_LAYOUT',
+    10061: 'NFS4ERR_RECALLCONFLICT',
+    10062: 'NFS4ERR_UNKNOWN_LAYOUTTYPE',
+    10063: 'NFS4ERR_SEQ_MISORDERED',
+    10064: 'NFS4ERR_SEQUENCE_POS',
+    10065: 'NFS4ERR_REQ_TOO_BIG',
+    10066: 'NFS4ERR_REP_TOO_BIG',
+    10067: 'NFS4ERR_REP_TOO_BIG_TO_CACHE',
+    10068: 'NFS4ERR_RETRY_UNCACHED_REP',
+    10069: 'NFS4ERR_UNSAFE_COMPOUND',
+    10070: 'NFS4ERR_TOO_MANY_OPS',
+    10071: 'NFS4ERR_OP_NOT_IN_SESSION',
+    10072: 'NFS4ERR_HASH_ALG_UNSUPP',
+    10074: 'NFS4ERR_CLIENTID_BUSY',
+    10075: 'NFS4ERR_PNFS_IO_HOLE',
+    10076: 'NFS4ERR_SEQ_FALSE_RETRY',
+    10077: 'NFS4ERR_BAD_HIGH_SLOT',
+    10078: 'NFS4ERR_DEADSESSION',
+    10079: 'NFS4ERR_ENCR_ALG_UNSUPP',
+    10080: 'NFS4ERR_PNFS_NO_LAYOUT',
+    10081: 'NFS4ERR_NOT_ONLY_OP',
+    10082: 'NFS4ERR_WRONG_CRED',
+    10083: 'NFS4ERR_WRONG_TYPE',
+    10084: 'NFS4ERR_DIRDELEG_UNAVAIL',
+    10085: 'NFS4ERR_REJECT_DELEG',
+    10086: 'NFS4ERR_RETURNCONFLICT',
+    10087: 'NFS4ERR_DELEG_REVOKED',
 }
 
 OP_NAMES = {
@@ -505,6 +813,25 @@ OP_NAMES = {
     37: 'OP_VERIFY',
     38: 'OP_WRITE',
     39: 'OP_RELEASE_LOCKOWNER',
+    40: 'OP_BACKCHANNEL_CTL',
+    41: 'OP_BIND_CONN_TO_SESSION',
+    42: 'OP_EXCHANGE_ID',
+    43: 'OP_CREATE_SESSION',
+    44: 'OP_DESTROY_SESSION',
+    45: 'OP_FREE_STATEID',
+    46: 'OP_GET_DIR_DELEGATION',
+    47: 'OP_GETDEVICEINFO',
+    48: 'OP_GETDEVICELIST',
+    49: 'OP_LAYOUTCOMMIT',
+    50: 'OP_LAYOUTGET',
+    51: 'OP_LAYOUTRETURN',
+    52: 'OP_SECINFO_NO_NAME',
+    53: 'OP_SEQUENCE',
+    54: 'OP_SET_SSV',
+    55: 'OP_TEST_STATEID',
+    56: 'OP_WANT_DELEGATION',
+    57: 'OP_DESTROY_CLIENTID',
+    58: 'OP_RECLAIM_COMPLETE',
     10044: 'OP_ILLEGAL',
 }
 # === END GENERATED CONSTANTS ===
@@ -526,6 +853,8 @@ MAXIO = 1048576              # advertised maxread/maxwrite
 MAX_RPC_RECORD = 4 * 1024 * 1024
 FSID_MAJOR = 0x6E667364      # arbitrary but stable fsid ("nfsd")
 SIDE_STREAM = ":nfsd.meta"   # NTFS ADS sidecar for uid/gid/mode on Windows
+MAX_SESSION_SLOTS = 64       # NFSv4.1 fore-channel slot table cap per session
+SLOT_CACHE_LIMIT = 262144    # cache session replies up to this size for replay
 
 
 # ---------------------------------------------------------------------------
@@ -908,7 +1237,8 @@ SEQID_NO_ADV = frozenset([
 
 class _Client(object):
     __slots__ = ("clientid", "verifier", "owner_id", "confirm", "confirmed",
-                 "last_renew", "principal")
+                 "last_renew", "principal", "eir_seq", "cs_replay",
+                 "sessions_n", "reclaim_done")
 
     def __init__(self, clientid, verifier, owner_id, confirm, principal):
         self.clientid = clientid
@@ -918,6 +1248,11 @@ class _Client(object):
         self.confirmed = False
         self.last_renew = time.monotonic()
         self.principal = principal
+        # NFSv4.1 (RFC 5661): EXCHANGE_ID/CREATE_SESSION bookkeeping
+        self.eir_seq = 1          # sequenceid expected in next CREATE_SESSION
+        self.cs_replay = None     # (csa_sequence, body) cached CREATE_SESSION
+        self.sessions_n = 0       # live sessions (DESTROY_CLIENTID busy check)
+        self.reclaim_done = False # RECLAIM_COMPLETE seen (COMPLETE_ALREADY)
 
 
 class _Owner(object):
@@ -958,6 +1293,30 @@ class _LockState(object):
         self.owner = owner       # (clientid, lock owner bytes)
 
 
+class _Slot(object):
+    """One NFSv4.1 session slot: at-most-once execution + reply cache.
+
+    seqid is the last sa_sequenceid accepted on this slot (0 = never used;
+    RFC 5661 sec 18.46.1: the first use of a slot carries sequenceid 1).
+    reply holds the full cached COMPOUND reply, or None when the reply was
+    too large to cache (filled distinguishes that from a never-used slot)."""
+    __slots__ = ("seqid", "reply", "filled")
+
+    def __init__(self):
+        self.seqid = 0
+        self.reply = None
+        self.filled = False
+
+
+class _Session(object):
+    __slots__ = ("sessionid", "clientid", "slots")
+
+    def __init__(self, sessionid, clientid, nslots):
+        self.sessionid = sessionid
+        self.clientid = clientid
+        self.slots = [_Slot() for _ in range(nslots)]
+
+
 MAX_END = 0xFFFFFFFFFFFFFFFF
 
 
@@ -979,6 +1338,8 @@ class State(object):
         self.lock_by_key = {}       # (clientid, owner, ino) -> _LockState
         self.locks = {}             # ino -> [(owner, type, start, end)]
         self.expired = set()        # stateid others invalidated by lease loss
+        self.sessions = {}          # sessionid (16 bytes) -> _Session
+        self.next_session = 1
 
     def _purge_client_locked(self, clientid):
         """Drop all opens/locks/owners of a clientid (lease expiry or a new
@@ -1080,6 +1441,154 @@ class State(object):
             c = self.clients.get(clientid)
             if c is not None:
                 c.last_renew = time.monotonic()
+
+    # -- NFSv4.1 client / session lifecycle (RFC 5661 sec 18.35/18.36) ----
+    def exchange_id(self, verifier, owner_id, principal):
+        """EXCHANGE_ID: return (clientid, eir_sequenceid, confirmed)."""
+        with self.lock:
+            cur_id = self.by_owner_id.get(owner_id)
+            cur = self.clients.get(cur_id) if cur_id else None
+            if cur is not None:
+                if cur.principal != principal:
+                    if self._client_has_state(cur.clientid):
+                        raise NfsErr(NFS4ERR_CLID_INUSE)
+                elif cur.verifier == verifier:
+                    # same client instance re-issuing EXCHANGE_ID: reuse
+                    cur.last_renew = time.monotonic()
+                    return cur.clientid, cur.eir_seq, True
+            # new client instance (or rebooted client): fresh unconfirmed
+            # record; the old confirmed one is displaced at CREATE_SESSION
+            for cid in [k for k, c in self.clients.items()
+                        if c.owner_id == owner_id and not c.confirmed]:
+                self.clients.pop(cid, None)
+            clientid = self.next_clientid
+            self.next_clientid += 1
+            c = _Client(clientid, verifier, owner_id, os.urandom(8), principal)
+            self.clients[clientid] = c
+            return clientid, c.eir_seq, False
+
+    def _new_sessionid(self):
+        n = self.next_session
+        self.next_session += 1
+        return struct.pack(">IQI", self.boot_epoch, n, 0)
+
+    def create_session(self, clientid, seq, nslots, build):
+        """CREATE_SESSION: exactly-once via the client's eir_seq; build(sess)
+        packs the resok body, which is cached for replay."""
+        with self.lock:
+            c = self.clients.get(clientid)
+            if c is None:
+                raise NfsErr(NFS4ERR_STALE_CLIENTID)
+            if c.cs_replay is not None and seq == c.cs_replay[0]:
+                return c.cs_replay[1]
+            if seq != c.eir_seq:
+                raise NfsErr(NFS4ERR_SEQ_MISORDERED)
+            if not c.confirmed:
+                prev = self.by_owner_id.get(c.owner_id)
+                if prev is not None and prev != clientid:
+                    self.clients.pop(prev, None)
+                    self._purge_client_locked(prev)
+                    for sid in [k for k, s in self.sessions.items()
+                                if s.clientid == prev]:
+                        self.sessions.pop(sid, None)
+                c.confirmed = True
+                self.by_owner_id[c.owner_id] = clientid
+            sess = _Session(self._new_sessionid(), clientid, nslots)
+            self.sessions[sess.sessionid] = sess
+            c.sessions_n += 1
+            c.last_renew = time.monotonic()
+            body = build(sess)
+            c.cs_replay = (seq, body)
+            c.eir_seq = (seq + 1) & 0xFFFFFFFF
+            return body
+
+    def sequence(self, sessionid, seqid, slotid):
+        """SEQUENCE slot logic: ('replay', bytes_or_None, sess, slot) for a
+        retransmission (bytes None = reply was not cached), or
+        ('process', sess, slot). Renews the client's lease."""
+        with self.lock:
+            sess = self.sessions.get(sessionid)
+            if sess is None:
+                raise NfsErr(NFS4ERR_BADSESSION)
+            if slotid >= len(sess.slots):
+                raise NfsErr(NFS4ERR_BADSLOT)
+            slot = sess.slots[slotid]
+            if seqid == slot.seqid and slot.filled:
+                return ("replay", slot.reply, sess, slot)
+            if seqid != ((slot.seqid + 1) & 0xFFFFFFFF):
+                raise NfsErr(NFS4ERR_SEQ_MISORDERED)
+            slot.seqid = seqid
+            slot.reply = None
+            slot.filled = False
+            c = self.clients.get(sess.clientid)
+            if c is not None:
+                c.last_renew = time.monotonic()
+            return ("process", sess, slot)
+
+    def slot_store(self, slot, reply):
+        with self.lock:
+            slot.reply = reply if len(reply) <= SLOT_CACHE_LIMIT else None
+            slot.filled = True
+
+    def find_session(self, sessionid):
+        with self.lock:
+            sess = self.sessions.get(sessionid)
+            if sess is None:
+                raise NfsErr(NFS4ERR_BADSESSION)
+            return sess
+
+    def destroy_session(self, sessionid):
+        with self.lock:
+            sess = self.sessions.pop(sessionid, None)
+            if sess is None:
+                raise NfsErr(NFS4ERR_BADSESSION)
+            c = self.clients.get(sess.clientid)
+            if c is not None and c.sessions_n > 0:
+                c.sessions_n -= 1
+
+    def destroy_clientid(self, clientid):
+        with self.lock:
+            c = self.clients.get(clientid)
+            if c is None:
+                raise NfsErr(NFS4ERR_STALE_CLIENTID)
+            if c.sessions_n > 0 or self._client_has_state(clientid):
+                raise NfsErr(NFS4ERR_CLIENTID_BUSY)
+            self.clients.pop(clientid, None)
+            if self.by_owner_id.get(c.owner_id) == clientid:
+                self.by_owner_id.pop(c.owner_id, None)
+
+    def reclaim_complete(self, clientid, one_fs):
+        with self.lock:
+            c = self.clients.get(clientid)
+            if c is None:
+                raise NfsErr(NFS4ERR_STALE_CLIENTID)
+            if not one_fs:
+                if c.reclaim_done:
+                    raise NfsErr(NFS4ERR_COMPLETE_ALREADY)
+                c.reclaim_done = True
+
+    def free_stateid(self, sid):
+        """FREE_STATEID (RFC 5661 sec 18.38): lock stateids with no locks
+        held, or revoked/expired stateids; opens raise LOCKS_HELD."""
+        other = sid[1]
+        with self.lock:
+            ls = self.lock_states.get(other)
+            if ls is not None:
+                held = [r for r in self.locks.get(ls.ino, ())
+                        if r[0] == ls.owner]
+                if held:
+                    raise NfsErr(NFS4ERR_LOCKS_HELD)
+                self.lock_states.pop(other, None)
+                self.lock_by_key.pop((ls.owner[0], ls.owner[1], ls.ino), None)
+                return
+            if other in self.opens:
+                raise NfsErr(NFS4ERR_LOCKS_HELD)
+            if other in self.expired:
+                self.expired.discard(other)
+                return
+        # unknown: surface STALE/BAD via the common resolution path
+        self.resolve_stateid(sid)
+        raise NfsErr(NFS4ERR_BAD_STATEID)
 
     # -- owners / seqid --------------------------------------------------
     def open_owner(self, clientid, owner_bytes):
@@ -1389,7 +1898,8 @@ class SideMeta(object):
 # ---------------------------------------------------------------------------
 
 class Ctx(object):
-    __slots__ = ("cfh", "sfh", "uid", "gid", "gids")
+    __slots__ = ("cfh", "sfh", "uid", "gid", "gids", "minor", "clientid",
+                 "session")
 
     def __init__(self, uid, gid, gids):
         self.cfh = None
@@ -1397,6 +1907,9 @@ class Ctx(object):
         self.uid = uid
         self.gid = gid
         self.gids = gids
+        self.minor = 0        # COMPOUND minorversion (0 or 1)
+        self.clientid = None  # NFSv4.1: clientid of the SEQUENCE's session
+        self.session = None   # NFSv4.1: _Session of this compound
 
     def need_cfh(self):
         if self.cfh is None:
@@ -1443,8 +1956,25 @@ class NfsServer(object):
         self.symlink_ok = self._probe_symlink()
         self.excl_verfs = {}
         self.ops = self._build_ops()
+        self.ops41 = self._build_ops41()
+        # ops a 4.1 client may send outside a session, as the only op of the
+        # compound (RFC 5661 sec 2.10.2 / 18.34-18.37, 18.50)
+        self.no_session_ops = frozenset([
+            OP_EXCHANGE_ID, OP_CREATE_SESSION, OP_BIND_CONN_TO_SESSION,
+            OP_DESTROY_SESSION, OP_DESTROY_CLIENTID])
+        # per-boot server identity for EXCHANGE_ID (server_owner/scope);
+        # random per boot: after a restart clients must not treat us as
+        # holding their old state (handles go stale by design)
+        self.owner_major = b"nfsd.py-" + os.urandom(8)
         self.supported_attrs = sorted(ATTR_ENCODERS) + [
             FATTR4_TIME_ACCESS_SET, FATTR4_TIME_MODIFY_SET]
+        self.supported_attrs.remove(FATTR4_SUPPATTR_EXCLCREAT)
+        self.supported_attrs41 = sorted(
+            self.supported_attrs + [FATTR4_SUPPATTR_EXCLCREAT])
+        # attrs a client may set in an EXCLUSIVE4_1 create (cva_attrs);
+        # time_access_set/time_modify_set are excluded (RFC 5661 sec 18.16.3)
+        self.exclcreat_attrs = [
+            FATTR4_SIZE, FATTR4_MODE, FATTR4_OWNER, FATTR4_OWNER_GROUP]
 
     def _probe_symlink(self):
         if not IS_WINDOWS:
@@ -1548,11 +2078,12 @@ class NfsServer(object):
         return True
 
     # -- fattr4 encoding -----------------------------------------------------
-    def encode_fattr(self, ino, path, st, want):
+    def encode_fattr(self, ino, path, st, want, minor=0):
         """Return fattr4 bytes (bitmap + attrlist) for requested attrs."""
-        avail = [a for a in want if a in ATTR_ENCODERS]
+        avail = [a for a in want if a in ATTR_ENCODERS
+                 and (minor or a != FATTR4_SUPPATTR_EXCLCREAT)]
         vals = Packer()
-        src = _AttrSrc(self, ino, path, st)
+        src = _AttrSrc(self, ino, path, st, minor)
         for a in avail:
             ATTR_ENCODERS[a](src, vals)
         pk = Packer()
@@ -1750,7 +2281,11 @@ class NfsServer(object):
         tag = up.opaque()
         minor = up.uint32()
         nops = up.uint32()
-        if minor != 0:
+        if minor == 0:
+            opstable = self.ops
+        elif minor == 1:
+            opstable = self.ops41
+        else:
             pk = Packer()
             pk.uint32(NFS4ERR_MINOR_VERS_MISMATCH)
             pk.opaque(tag)
@@ -1764,47 +2299,47 @@ class NfsServer(object):
             return pk.get()
 
         ctx = Ctx(uid, gid, gids)
+        ctx.minor = minor
         results = []
         status = NFS4_OK
-        for _ in range(nops):
+        slot = None
+        remaining = nops
+
+        if minor == 1 and nops > 0:
+            # RFC 5661 sec 2.10.2: the first op of a 4.1 compound is either
+            # SEQUENCE or one of the few ops usable outside a session (and
+            # then it must be the only op).
             opnum = up.uint32()
-            fn = self.ops.get(opnum)
-            if fn is None:
-                status = NFS4ERR_OP_ILLEGAL
+            remaining = nops - 1
+            if opnum == OP_SEQUENCE:
+                status, slot, replay = self._begin_sequence(ctx, up, results,
+                                                            remaining)
+                if replay is not None:
+                    return replay
+                if status != NFS4_OK:
+                    remaining = 0
+            elif opnum in self.no_session_ops:
+                if nops != 1:
+                    status = NFS4ERR_NOT_ONLY_OP
+                    rp = Packer()
+                    rp.uint32(opnum)
+                    rp.uint32(status)
+                    results.append(rp.get())
+                    remaining = 0
+                else:
+                    status = self._exec_op(ctx, up, opnum, opstable, results)
+                    remaining = 0
+            else:
+                status = NFS4ERR_OP_NOT_IN_SESSION
                 rp = Packer()
-                rp.uint32(OP_ILLEGAL)
+                rp.uint32(opnum)
                 rp.uint32(status)
                 results.append(rp.get())
-                break
-            try:
-                body = fn(ctx, up)
-                status = struct.unpack_from(">I", body)[0]
-            except NfsErr as e:
-                status = e.stat
-                body = self._error_body(opnum, status)
-            except XdrError:
-                # RFC 7530: operation arguments that cannot be decoded
-                # yield NFS4ERR_BADXDR for that operation.
-                status = NFS4ERR_BADXDR
-                body = self._error_body(opnum, status)
-            except OverflowError:
-                # e.g. offsets/sizes beyond what the OS accepts
-                status = NFS4ERR_INVAL
-                body = self._error_body(opnum, status)
-            except OSError as e:
-                status = oserror_to_stat(e)
-                body = self._error_body(opnum, status)
-            except Exception:
-                log.exception("op %s failed", OP_NAMES.get(opnum, opnum))
-                status = NFS4ERR_SERVERFAULT
-                body = self._error_body(opnum, status)
-            rp = Packer()
-            rp.uint32(opnum)
-            rp.raw(body)
-            results.append(rp.get())
-            if log.isEnabledFor(logging.DEBUG):
-                log.debug("%s -> %s", OP_NAMES.get(opnum, opnum),
-                          NFSSTAT4_NAMES.get(status, status))
+                remaining = 0
+
+        for _ in range(remaining):
+            opnum = up.uint32()
+            status = self._exec_op(ctx, up, opnum, opstable, results)
             if status != NFS4_OK:
                 break
 
@@ -1814,7 +2349,113 @@ class NfsServer(object):
         pk.uint32(len(results))
         for r in results:
             pk.raw(r)
+        reply = pk.get()
+        if slot is not None:
+            self.state.slot_store(slot, reply)
+        return reply
+
+    def _exec_op(self, ctx, up, opnum, opstable, results):
+        """Decode and run one op, appending its result; returns its status."""
+        fn = opstable.get(opnum)
+        if fn is None:
+            status = NFS4ERR_OP_ILLEGAL
+            rp = Packer()
+            rp.uint32(OP_ILLEGAL)
+            rp.uint32(status)
+            results.append(rp.get())
+            return status
+        try:
+            body = fn(ctx, up)
+            status = struct.unpack_from(">I", body)[0]
+        except NfsErr as e:
+            status = e.stat
+            body = self._error_body(opnum, status)
+        except XdrError:
+            # RFC 7530: operation arguments that cannot be decoded
+            # yield NFS4ERR_BADXDR for that operation.
+            status = NFS4ERR_BADXDR
+            body = self._error_body(opnum, status)
+        except OverflowError:
+            # e.g. offsets/sizes beyond what the OS accepts
+            status = NFS4ERR_INVAL
+            body = self._error_body(opnum, status)
+        except OSError as e:
+            status = oserror_to_stat(e)
+            body = self._error_body(opnum, status)
+        except Exception:
+            log.exception("op %s failed", OP_NAMES.get(opnum, opnum))
+            status = NFS4ERR_SERVERFAULT
+            body = self._error_body(opnum, status)
+        rp = Packer()
+        rp.uint32(opnum)
+        rp.raw(body)
+        results.append(rp.get())
+        if log.isEnabledFor(logging.DEBUG):
+            log.debug("%s -> %s", OP_NAMES.get(opnum, opnum),
+                      NFSSTAT4_NAMES.get(status, status))
+        return status
+
+    def _sequence_resok(self, sess, seqid, slotid):
+        pk = Packer()
+        pk.uint32(NFS4_OK)
+        pk.opaque_fixed(sess.sessionid)
+        pk.uint32(seqid)
+        pk.uint32(slotid)
+        pk.uint32(len(sess.slots) - 1)   # sr_highest_slotid
+        pk.uint32(len(sess.slots) - 1)   # sr_target_highest_slotid
+        pk.uint32(0)                     # sr_status_flags
         return pk.get()
+
+    def _begin_sequence(self, ctx, up, results, remaining):
+        """Handle the leading SEQUENCE op. Returns (status, slot, replay):
+        replay is a complete cached compound reply to send verbatim (or a
+        rebuilt NFS4ERR_RETRY_UNCACHED_REP reply when the original was too
+        big to cache); slot is where to cache this compound's reply."""
+        sessionid = up.opaque_fixed(NFS4_SESSIONID_SIZE)
+        seqid = up.uint32()
+        slotid = up.uint32()
+        up.uint32()      # sa_highest_slotid
+        up.boolean()     # sa_cachethis (cached regardless, size-limited)
+        try:
+            disp = self.state.sequence(sessionid, seqid, slotid)
+        except NfsErr as e:
+            rp = Packer()
+            rp.uint32(OP_SEQUENCE)
+            rp.uint32(e.stat)
+            results.append(rp.get())
+            return e.stat, None, None
+        if disp[0] == "replay":
+            cached, sess = disp[1], disp[2]
+            if cached is not None:
+                return NFS4_OK, None, cached
+            # reply was too large to cache: RFC 5661 sec 2.10.6.1.3 -- fail
+            # the op after SEQUENCE with NFS4ERR_RETRY_UNCACHED_REP
+            pk = Packer()
+            pk.uint32(NFS4ERR_RETRY_UNCACHED_REP)
+            pk.opaque(b"")
+            seq_res = Packer()
+            seq_res.uint32(OP_SEQUENCE)
+            seq_res.raw(self._sequence_resok(sess, seqid, slotid))
+            if remaining > 0:
+                opnum2 = up.uint32()
+                op_res = Packer()
+                op_res.uint32(opnum2)
+                op_res.uint32(NFS4ERR_RETRY_UNCACHED_REP)
+                pk.uint32(2)
+                pk.raw(seq_res.get())
+                pk.raw(op_res.get())
+            else:
+                pk.uint32(1)
+                pk.raw(seq_res.get())
+            return NFS4_OK, None, pk.get()
+        sess, slot = disp[1], disp[2]
+        ctx.session = sess
+        ctx.clientid = sess.clientid
+        rp = Packer()
+        rp.uint32(OP_SEQUENCE)
+        rp.raw(self._sequence_resok(sess, seqid, slotid))
+        results.append(rp.get())
+        return NFS4_OK, slot, None
 
     @staticmethod
     def _error_body(opnum, status):
@@ -1865,6 +2506,32 @@ class NfsServer(object):
             OP_WRITE: self.op_write,
             OP_RELEASE_LOCKOWNER: self.op_release_lockowner,
         }
+
+    def _build_ops41(self):
+        """NFSv4.1 op table: the shared 4.0 ops, minus the ops RFC 5661
+        removes (MUST NOT be used -> NFS4ERR_NOTSUPP), plus the session ops.
+        Optional 4.1 features we do not implement (pNFS layouts, delegations,
+        backchannel, SSV) also answer NFS4ERR_NOTSUPP."""
+        ops = dict(self.ops)
+        for op in (OP_OPEN_CONFIRM, OP_SETCLIENTID, OP_SETCLIENTID_CONFIRM,
+                   OP_RENEW, OP_RELEASE_LOCKOWNER,
+                   OP_DELEGPURGE, OP_DELEGRETURN,
+                   OP_BACKCHANNEL_CTL, OP_GET_DIR_DELEGATION,
+                   OP_GETDEVICEINFO, OP_GETDEVICELIST, OP_LAYOUTCOMMIT,
+                   OP_LAYOUTGET, OP_LAYOUTRETURN, OP_SET_SSV,
+                   OP_WANT_DELEGATION):
+            ops[op] = self.op_notsupp
+        ops[OP_EXCHANGE_ID] = self.op_exchange_id
+        ops[OP_CREATE_SESSION] = self.op_create_session
+        ops[OP_DESTROY_SESSION] = self.op_destroy_session
+        ops[OP_DESTROY_CLIENTID] = self.op_destroy_clientid
+        ops[OP_BIND_CONN_TO_SESSION] = self.op_bind_conn_to_session
+        ops[OP_SEQUENCE] = self.op_sequence_mid
+        ops[OP_RECLAIM_COMPLETE] = self.op_reclaim_complete
+        ops[OP_SECINFO_NO_NAME] = self.op_secinfo_no_name
+        ops[OP_FREE_STATEID] = self.op_free_stateid
+        ops[OP_TEST_STATEID] = self.op_test_stateid
+        return ops
 
     def op_access(self, ctx, up):
         want = up.uint32()
@@ -1930,6 +2597,8 @@ class NfsServer(object):
             pack_stateid(pk, st.gen, st.other)
             return pk.get()
 
+        if ctx.minor:
+            return work()
         return self._seqid_dispatch(owner, seqid, OP_CLOSE, work)
 
     def _require_regular(self, path):
@@ -2043,7 +2712,7 @@ class NfsServer(object):
         st = self.lstat(path)
         pk = Packer()
         pk.uint32(NFS4_OK)
-        pk.raw(self.encode_fattr(ino, path, st, sorted(want)))
+        pk.raw(self.encode_fattr(ino, path, st, sorted(want), ctx.minor))
         return pk.get()
 
     def op_getfh(self, ctx, up):
@@ -2124,6 +2793,9 @@ class NfsServer(object):
             lock_seqid = up.uint32()
             clientid = up.uint64()
             owner_bytes = up.opaque(NFS4_OPAQUE_LIMIT)
+            if ctx.minor:
+                # RFC 5661 sec 18.10.3: lock_owner4 clientid is ignored
+                clientid = ctx.clientid
             o = self.state.get_open(open_sid[1])
             if o is None:
                 self.state.resolve_stateid(open_sid)
@@ -2142,6 +2814,8 @@ class NfsServer(object):
                 self.state.seqid_commit(lock_own, lock_seqid, body)
                 return body
 
+            if ctx.minor:
+                return work()
             return self._seqid_dispatch(open_owner, open_seqid, OP_LOCK, work)
         else:
             lock_sid = unpack_stateid(up)
@@ -2157,6 +2831,8 @@ class NfsServer(object):
                 return self._do_lock(ino, ls0.owner, ls, offset, length,
                                      locktype)
 
+            if ctx.minor:
+                return work()
             return self._seqid_dispatch(lock_own, lock_seqid, OP_LOCK, work)
 
     def op_lockt(self, ctx, up):
@@ -2165,6 +2841,8 @@ class NfsServer(object):
         length = up.uint64()
         clientid = up.uint64()
         owner_bytes = up.opaque(NFS4_OPAQUE_LIMIT)
+        if ctx.minor:
+            clientid = ctx.clientid      # 4.1: session clientid governs
         ino = ctx.need_cfh()
         self.state.check_client(clientid)
         tpath = self.path_of(ino)
@@ -2203,6 +2881,8 @@ class NfsServer(object):
             pack_stateid(pk, ls.gen, ls.other)
             return pk.get()
 
+        if ctx.minor:
+            return work()
         return self._seqid_dispatch(lock_own, lock_seqid, OP_LOCKU, work)
 
     def op_lookup(self, ctx, up):
@@ -2241,11 +2921,13 @@ class NfsServer(object):
                 raise NfsErr(NFS4ERR_INVAL)
             if a not in ATTR_ENCODERS:
                 raise NfsErr(NFS4ERR_ATTRNOTSUPP)
+            if a == FATTR4_SUPPATTR_EXCLCREAT and not ctx.minor:
+                raise NfsErr(NFS4ERR_ATTRNOTSUPP)   # 4.1-only attribute
         ino = ctx.need_cfh()
         path = self.path_of(ino)
         st = self.lstat(path)
         vals = Packer()
-        src = _AttrSrc(self, ino, path, st)
+        src = _AttrSrc(self, ino, path, st, ctx.minor)
         for a in bits:
             ATTR_ENCODERS[a](src, vals)
         return vals.get() == theirs
@@ -2268,6 +2950,16 @@ class NfsServer(object):
         share_deny = up.uint32()
         clientid = up.uint64()
         owner_bytes = up.opaque(NFS4_OPAQUE_LIMIT)
+        if ctx.minor:
+            # RFC 5661 sec 18.16.3: the open_owner4 clientid field is
+            # ignored; the session's clientid governs
+            clientid = ctx.clientid
+            # 4.1 share_access carries WANT_* delegation hints; we never
+            # grant delegations (no backchannel), so drop them and keep
+            # the plain access bits (RFC 5661 sec 18.16.3)
+            share_access &= ~(OPEN4_SHARE_ACCESS_WANT_DELEG_MASK
+                              | OPEN4_SHARE_ACCESS_WANT_SIGNAL_DELEG_WHEN_RESRC_AVAIL
+                              | OPEN4_SHARE_ACCESS_WANT_PUSH_DELEG_WHEN_UNCONTENDED)
         opentype = up.uint32()
         createhow = None
         cvals = {}
@@ -2278,16 +2970,73 @@ class NfsServer(object):
                 bits = unpack_bitmap(up)
                 alist = Unpacker(up.opaque())
                 cvals = self.decode_settable(bits, alist, for_create=True)
-            else:                          # EXCLUSIVE4
+            elif createhow == EXCLUSIVE4:
                 cverf = up.opaque_fixed(NFS4_VERIFIER_SIZE)
+            elif createhow == EXCLUSIVE4_1 and ctx.minor:
+                cverf = up.opaque_fixed(NFS4_VERIFIER_SIZE)
+                bits = unpack_bitmap(up)
+                alist = Unpacker(up.opaque())
+                if (FATTR4_TIME_ACCESS_SET in bits
+                        or FATTR4_TIME_MODIFY_SET in bits):
+                    raise NfsErr(NFS4ERR_INVAL)   # 18.16.3: MUST NOT set
+                cvals = self.decode_settable(bits, alist, for_create=True)
+            else:
+                raise XdrError("createhow4 %d" % createhow)
         claim = up.uint32()
         claim_name = None
         if claim == CLAIM_NULL:
             claim_name = up.string()
         owner = self.state.open_owner(clientid, owner_bytes)
 
+        def open_by(ino, dpath, before, applied):
+            """Shared tail of OPEN: type/access/share checks, state, resok."""
+            path2 = self.path_of(ino)
+            st = self.lstat(path2)
+            if statmod.S_ISDIR(st.st_mode):
+                raise NfsErr(NFS4ERR_ISDIR)
+            if not statmod.S_ISREG(st.st_mode):
+                raise NfsErr(NFS4ERR_SYMLINK)
+            if opentype != OPEN4_CREATE:
+                uid, gid, mode = self.file_ugm(ino, path2, st)
+                if not self.check_access(ctx, st, uid, gid, mode,
+                                         bool(share_access
+                                              & OPEN4_SHARE_ACCESS_READ),
+                                         bool(share_access
+                                              & OPEN4_SHARE_ACCESS_WRITE),
+                                         False):
+                    raise NfsErr(NFS4ERR_ACCESS)
+            if self.state.share_conflict(ino, share_access, share_deny,
+                                         (clientid, owner_bytes)):
+                raise NfsErr(NFS4ERR_SHARE_DENIED)
+
+            o, is_new = self.state.open_file(clientid, owner_bytes, ino,
+                                             share_access, share_deny, ctx.uid)
+            if ctx.minor:
+                # NFSv4.1 has no OPEN_CONFIRM: opens are born confirmed
+                # (RFC 5661 sec 18.16.3) and the CONFIRM rflag MUST NOT be set
+                owner.confirmed = True
+                need_confirm = False
+            else:
+                need_confirm = not owner.confirmed
+            if is_new:
+                o.confirmed = owner.confirmed
+            ctx.cfh = ino
+            rflags = OPEN4_RESULT_LOCKTYPE_POSIX
+            if need_confirm:
+                rflags |= OPEN4_RESULT_CONFIRM
+            pk = Packer()
+            pk.uint32(NFS4_OK)
+            pack_stateid(pk, o.gen, o.other)
+            pk.boolean(False)
+            pk.uint64(before)
+            pk.uint64(self.dir_cinfo(dpath) if dpath else before)
+            pk.uint32(rflags)
+            pk.raw(pack_bitmap(applied))
+            pk.uint32(OPEN_DELEGATE_NONE)
+            return pk.get()
+
         def work():
-            if claim != CLAIM_NULL:
+            if claim != CLAIM_NULL and not (claim == CLAIM_FH and ctx.minor):
                 if claim == CLAIM_PREVIOUS:
                     raise NfsErr(NFS4ERR_NO_GRACE)
                 raise NfsErr(NFS4ERR_NOTSUPP)
@@ -2296,10 +3045,19 @@ class NfsServer(object):
             if share_deny & ~OPEN4_SHARE_DENY_BOTH:
                 raise NfsErr(NFS4ERR_INVAL)
             self.state.check_client(clientid)
+            wants_write = bool(share_access & OPEN4_SHARE_ACCESS_WRITE)
+            if claim == CLAIM_FH:
+                # RFC 5661 sec 18.16.3: open of an existing file by its
+                # filehandle (CURRENT_FH is the file, not the directory);
+                # change_info in the reply is of no consequence
+                if opentype == OPEN4_CREATE:
+                    raise NfsErr(NFS4ERR_INVAL)
+                if self.read_only and wants_write:
+                    raise NfsErr(NFS4ERR_ROFS)
+                return open_by(ctx.need_cfh(), None, 0, [])
             dir_ino = ctx.need_cfh()
             dpath = self.path_of(dir_ino)
             path = self.child_path(dir_ino, claim_name)
-            wants_write = bool(share_access & OPEN4_SHARE_ACCESS_WRITE)
             if self.read_only and (wants_write or opentype == OPEN4_CREATE):
                 raise NfsErr(NFS4ERR_ROFS)
 
@@ -2308,17 +3066,23 @@ class NfsServer(object):
             if opentype == OPEN4_CREATE:
                 flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0)
                 existed = os.path.lexists(path)
-                if createhow == EXCLUSIVE4:
+                if createhow in (EXCLUSIVE4, EXCLUSIVE4_1):
                     ino0 = self.imap.get_child(dir_ino, claim_name)
                     if existed:
                         prev = self.excl_verfs.get(ino0) if ino0 else None
                         if prev != cverf:
                             raise NfsErr(NFS4ERR_EXIST)
                     else:
-                        fd = os.open(path, flags | os.O_EXCL, 0o644)
+                        fd = os.open(path, flags | os.O_EXCL,
+                                     cvals.get("mode", 0o644))
                         os.close(fd)
                         ino0 = self.imap.get_or_alloc(dir_ino, claim_name)
                         self.excl_verfs[ino0] = cverf
+                        if cvals:              # EXCLUSIVE4_1 cva_attrs
+                            try:
+                                applied += self.apply_attrs(ino0, path, cvals)
+                            except OSError:
+                                pass
                         self._chown_new(path, ctx, ino0)
                 else:
                     if createhow == GUARDED4:
@@ -2343,42 +3107,12 @@ class NfsServer(object):
                     raise NfsErr(NFS4ERR_NOENT)
 
             ino = self.imap.get_or_alloc(dir_ino, claim_name)
-            st = self.lstat(path)
-            if statmod.S_ISDIR(st.st_mode):
-                raise NfsErr(NFS4ERR_ISDIR)
-            if not statmod.S_ISREG(st.st_mode):
-                raise NfsErr(NFS4ERR_SYMLINK)
-            if opentype != OPEN4_CREATE:
-                uid, gid, mode = self.file_ugm(ino, path, st)
-                if not self.check_access(ctx, st, uid, gid, mode,
-                                         bool(share_access
-                                              & OPEN4_SHARE_ACCESS_READ),
-                                         wants_write, False):
-                    raise NfsErr(NFS4ERR_ACCESS)
-            if self.state.share_conflict(ino, share_access, share_deny,
-                                         (clientid, owner_bytes)):
-                raise NfsErr(NFS4ERR_SHARE_DENIED)
+            return open_by(ino, dpath, before, applied)
 
-            o, is_new = self.state.open_file(clientid, owner_bytes, ino,
-                                             share_access, share_deny, ctx.uid)
-            need_confirm = not owner.confirmed
-            if is_new:
-                o.confirmed = owner.confirmed
-            ctx.cfh = ino
-            rflags = OPEN4_RESULT_LOCKTYPE_POSIX
-            if need_confirm:
-                rflags |= OPEN4_RESULT_CONFIRM
-            pk = Packer()
-            pk.uint32(NFS4_OK)
-            pack_stateid(pk, o.gen, o.other)
-            pk.boolean(False)
-            pk.uint64(before)
-            pk.uint64(self.dir_cinfo(dpath))
-            pk.uint32(rflags)
-            pk.raw(pack_bitmap(applied))
-            pk.uint32(OPEN_DELEGATE_NONE)
-            return pk.get()
-
+        if ctx.minor:
+            # 4.1: the owner seqid field is ignored; sessions provide the
+            # exactly-once semantics (RFC 5661 sec 8.13)
+            return work()
         return self._seqid_dispatch(owner, seqid, OP_OPEN, work)
 
     def op_open_confirm(self, ctx, up):
@@ -2432,6 +3166,8 @@ class NfsServer(object):
             pack_stateid(pk, st.gen, st.other)
             return pk.get()
 
+        if ctx.minor:
+            return work()
         return self._seqid_dispatch(owner, seqid, OP_OPEN_DOWNGRADE, work)
 
     def op_putfh(self, ctx, up):
@@ -2538,7 +3274,7 @@ class NfsServer(object):
             ep.boolean(True)
             ep.uint64(this_cookie)
             ep.string(name)
-            ep.raw(self.encode_fattr(cino, cpath, st, want))
+            ep.raw(self.encode_fattr(cino, cpath, st, want, ctx.minor))
             eb = ep.get()
             nb = 8 + 4 + len(name)
             if emitted and (used + len(eb) + 8 > maxcount
@@ -2673,6 +3409,8 @@ class NfsServer(object):
         pk.uint32(2)
         pk.uint32(AUTH_SYS)
         pk.uint32(AUTH_NONE)
+        if ctx.minor:
+            ctx.cfh = None   # 4.1: consumed on success (RFC 5661 sec 18.29.3)
         return pk.get()
 
     def op_setattr(self, ctx, up):
@@ -2699,6 +3437,202 @@ class NfsServer(object):
         pk = Packer()
         pk.uint32(NFS4_OK)
         pk.raw(pack_bitmap(applied))
+        return pk.get()
+
+    # -- NFSv4.1 session ops (RFC 5661 / RFC 5662 XDR) ---------------------
+    def op_notsupp(self, ctx, up):
+        raise NfsErr(NFS4ERR_NOTSUPP)
+
+    def op_sequence_mid(self, ctx, up):
+        # a SEQUENCE that is not the first op (RFC 5661 sec 18.46.3)
+        raise NfsErr(NFS4ERR_SEQUENCE_POS)
+
+    def op_exchange_id(self, ctx, up):
+        verifier = up.opaque_fixed(NFS4_VERIFIER_SIZE)
+        owner_id = up.opaque(NFS4_OPAQUE_LIMIT)
+        flags = up.uint32()
+        spa_how = up.uint32()
+        if spa_how != SP4_NONE:
+            # no RPCSEC_GSS -> no machine-cred / SSV state protection
+            raise NfsErr(NFS4ERR_NOTSUPP)
+        n_impl = up.uint32()
+        if n_impl > 1:
+            raise XdrError("eia_client_impl_id<1>")
+        if n_impl == 1:
+            up.string()      # nii_domain
+            up.string()      # nii_name
+            up.int64()       # nii_date.seconds
+            up.uint32()      # nii_date.nseconds
+        if flags & EXCHGID4_FLAG_CONFIRMED_R:
+            raise NfsErr(NFS4ERR_INVAL)  # reply-only flag (18.35.3)
+        clientid, eir_seq, confirmed = self.state.exchange_id(
+            verifier, owner_id, ctx.uid)
+        out_flags = EXCHGID4_FLAG_USE_NON_PNFS
+        if confirmed:
+            out_flags |= EXCHGID4_FLAG_CONFIRMED_R
+        pk = Packer()
+        pk.uint32(NFS4_OK)
+        pk.uint64(clientid)
+        pk.uint32(eir_seq)
+        pk.uint32(out_flags)
+        pk.uint32(SP4_NONE)              # eir_state_protect
+        pk.uint64(0)                     # so_minor_id
+        pk.opaque(self.owner_major)      # so_major_id
+        pk.opaque(self.owner_major)      # eir_server_scope
+        pk.uint32(0)                     # eir_server_impl_id: none
+        return pk.get()
+
+    @staticmethod
+    def _chan_attrs(up):
+        """Decode channel_attrs4 -> (headerpad, maxreq, maxresp,
+        maxresp_cached, maxops, maxreqs)."""
+        vals = (up.uint32(), up.uint32(), up.uint32(),
+                up.uint32(), up.uint32(), up.uint32())
+        n_ird = up.uint32()              # ca_rdma_ird<1>
+        if n_ird > 1:
+            raise XdrError("ca_rdma_ird<1>")
+        for _ in range(n_ird):
+            up.uint32()
+        return vals
+
+    @staticmethod
+    def _pack_chan_attrs(pk, attrs, nslots, cache_limit):
+        """Pack the negotiated channel_attrs4: each value may only be
+        adjusted downward from the client's ask (RFC 5661 sec 18.36.3)."""
+        pk.uint32(0)                                   # ca_headerpadsize
+        pk.uint32(min(attrs[1], MAX_RPC_RECORD))       # ca_maxrequestsize
+        pk.uint32(min(attrs[2], MAX_RPC_RECORD))       # ca_maxresponsesize
+        pk.uint32(min(attrs[3], cache_limit))          # ..._cached
+        pk.uint32(min(attrs[4], 256))                  # ca_maxoperations
+        pk.uint32(nslots)                              # ca_maxrequests
+        pk.uint32(0)                                   # ca_rdma_ird: none
+        return pk
+
+    def _skip_sec_parms(self, up):
+        """Consume one callback_sec_parms4 (we run no backchannel)."""
+        flavor = up.uint32()
+        if flavor == AUTH_SYS:
+            up.uint32()                  # stamp
+            up.string()                  # machinename
+            up.uint32()                  # uid
+            up.uint32()                  # gid
+            n = up.uint32()              # gids<16>
+            if n > 16:
+                raise XdrError("authsys gids")
+            for _ in range(n):
+                up.uint32()
+        elif flavor == RPCSEC_GSS:
+            up.uint32()                  # gcbp_service
+            up.opaque()                  # gcbp_handle_from_server
+            up.opaque()                  # gcbp_handle_from_client
+        elif flavor != AUTH_NONE:
+            raise XdrError("callback_sec_parms4 flavor")
+
+    def op_create_session(self, ctx, up):
+        clientid = up.uint64()
+        seq = up.uint32()
+        up.uint32()                      # csa_flags: no backchannel/persist
+        fore = self._chan_attrs(up)
+        back = self._chan_attrs(up)
+        up.uint32()                      # csa_cb_program
+        n_sec = up.uint32()
+        if n_sec > 16:
+            raise XdrError("csa_sec_parms")
+        for _ in range(n_sec):
+            self._skip_sec_parms(up)
+        nslots = max(1, min(fore[5], MAX_SESSION_SLOTS))
+
+        def build(sess):
+            pk = Packer()
+            pk.uint32(NFS4_OK)
+            pk.opaque_fixed(sess.sessionid)
+            pk.uint32(seq)
+            pk.uint32(0)                 # csr_flags: no CONN_BACK_CHAN
+            self._pack_chan_attrs(pk, fore, len(sess.slots), SLOT_CACHE_LIMIT)
+            self._pack_chan_attrs(pk, back, back[5], back[3])
+            return pk.get()
+
+        return self.state.create_session(clientid, seq, nslots, build)
+
+    def op_destroy_session(self, ctx, up):
+        sessionid = up.opaque_fixed(NFS4_SESSIONID_SIZE)
+        self.state.destroy_session(sessionid)
+        pk = Packer()
+        pk.uint32(NFS4_OK)
+        return pk.get()
+
+    def op_destroy_clientid(self, ctx, up):
+        clientid = up.uint64()
+        self.state.destroy_clientid(clientid)
+        pk = Packer()
+        pk.uint32(NFS4_OK)
+        return pk.get()
+
+    def op_bind_conn_to_session(self, ctx, up):
+        sessionid = up.opaque_fixed(NFS4_SESSIONID_SIZE)
+        up.uint32()                      # bctsa_dir
+        up.boolean()                     # bctsa_use_conn_in_rdma_mode
+        sess = self.state.find_session(sessionid)
+        pk = Packer()
+        pk.uint32(NFS4_OK)
+        pk.opaque_fixed(sess.sessionid)
+        pk.uint32(CDFS4_FORE)            # fore channel only (no callbacks)
+        pk.boolean(False)
+        return pk.get()
+
+    def op_reclaim_complete(self, ctx, up):
+        one_fs = up.boolean()
+        if ctx.session is None:
+            raise NfsErr(NFS4ERR_OP_NOT_IN_SESSION)
+        self.state.reclaim_complete(ctx.clientid, one_fs)
+        pk = Packer()
+        pk.uint32(NFS4_OK)
+        return pk.get()
+
+    def op_secinfo_no_name(self, ctx, up):
+        style = up.uint32()
+        if style not in (SECINFO_STYLE4_CURRENT_FH, SECINFO_STYLE4_PARENT):
+            raise NfsErr(NFS4ERR_INVAL)
+        ino = ctx.need_cfh()
+        if style == SECINFO_STYLE4_PARENT:
+            self.dir_path_of(ino)        # must be a directory
+        else:
+            self.path_of(ino)            # object must still resolve
+        pk = Packer()
+        pk.uint32(NFS4_OK)
+        pk.uint32(2)
+        pk.uint32(AUTH_SYS)
+        pk.uint32(AUTH_NONE)
+        ctx.cfh = None                   # consumed on success (18.45.3)
+        return pk.get()
+
+    def op_free_stateid(self, ctx, up):
+        sid = unpack_stateid(up)
+        self.state.free_stateid(sid)
+        pk = Packer()
+        pk.uint32(NFS4_OK)
+        return pk.get()
+
+    def op_test_stateid(self, ctx, up):
+        n = up.uint32()
+        if n > 1024:
+            raise NfsErr(NFS4ERR_RESOURCE)
+        sids = [unpack_stateid(up) for _ in range(n)]
+        codes = []
+        for sid in sids:
+            if sid == ZERO_STATEID or sid == ONES_STATEID:
+                codes.append(NFS4ERR_BAD_STATEID)
+                continue
+            try:
+                self.state.resolve_stateid(sid)
+                codes.append(NFS4_OK)
+            except NfsErr as e:
+                codes.append(e.stat)
+        pk = Packer()
+        pk.uint32(NFS4_OK)
+        pk.uint32(len(codes))
+        for c in codes:
+            pk.uint32(c)
         return pk.get()
 
     def op_setclientid(self, ctx, up):
@@ -2778,15 +3712,16 @@ class NfsServer(object):
 # ---------------------------------------------------------------------------
 
 class _AttrSrc(object):
-    __slots__ = ("srv", "ino", "path", "st", "_vfs", "_ugm")
+    __slots__ = ("srv", "ino", "path", "st", "_vfs", "_ugm", "minor")
 
-    def __init__(self, srv, ino, path, st):
+    def __init__(self, srv, ino, path, st, minor=0):
         self.srv = srv
         self.ino = ino
         self.path = path
         self.st = st
         self._vfs = None
         self._ugm = None
+        self.minor = minor
 
     def vfs(self):
         if self._vfs is None:
@@ -2840,7 +3775,14 @@ def _build_attr_encoders():
 
     @reg(FATTR4_SUPPORTED_ATTRS)
     def _supported(src, pk):
-        pk.raw(pack_bitmap(src.srv.supported_attrs))
+        pk.raw(pack_bitmap(src.srv.supported_attrs41 if src.minor
+                           else src.srv.supported_attrs))
+
+    @reg(FATTR4_SUPPATTR_EXCLCREAT)
+    def _exclcreat(src, pk):
+        # NFSv4.1 REQUIRED attr (RFC 5661 sec 5.8.1.14): attrs a client may
+        # set in an EXCLUSIVE4_1 create
+        pk.raw(pack_bitmap(src.srv.exclcreat_attrs))
 
     @reg(FATTR4_TYPE)
     def _type(src, pk):

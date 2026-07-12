@@ -2,8 +2,8 @@
 """Protocol-level smoke test for nfsd.py.
 
 Starts the server in-process on a loopback port and speaks raw NFSv4.0
-(ONC RPC + COMPOUND) to it using nfsd.py's own XDR helpers and
-RFC-extracted constants. Needs no mount privileges and no kernel NFS
+and NFSv4.1 (ONC RPC + COMPOUND) to it using nfsd.py's own XDR helpers
+and RFC-extracted constants. Needs no mount privileges and no kernel NFS
 client, so it runs identically on Linux, Windows and macOS -- including
 CI runners.
 
@@ -155,6 +155,125 @@ def op_remove(name):
     return pk.get()
 
 
+# --- NFSv4.1 op builders (arg layouts per RFC 5662 XDR) ----------------------
+
+def op_exchange_id(verifier, ownerid):
+    pk = nfsd.Packer()
+    pk.uint32(nfsd.OP_EXCHANGE_ID)
+    pk.opaque_fixed(verifier)          # co_verifier
+    pk.opaque(ownerid)                 # co_ownerid
+    pk.uint32(0)                       # eia_flags
+    pk.uint32(nfsd.SP4_NONE)           # eia_state_protect
+    pk.uint32(0)                       # eia_client_impl_id<1>: none
+    return pk.get()
+
+
+def _chan_attrs(pk):
+    pk.uint32(0)                       # ca_headerpadsize
+    pk.uint32(1049620)                 # ca_maxrequestsize
+    pk.uint32(1049620)                 # ca_maxresponsesize
+    pk.uint32(4096)                    # ca_maxresponsesize_cached
+    pk.uint32(8)                       # ca_maxoperations
+    pk.uint32(16)                      # ca_maxrequests
+    pk.uint32(0)                       # ca_rdma_ird<1>: none
+
+
+def op_create_session(clientid, seq):
+    pk = nfsd.Packer()
+    pk.uint32(nfsd.OP_CREATE_SESSION)
+    pk.uint64(clientid)
+    pk.uint32(seq)
+    pk.uint32(0)                       # csa_flags
+    _chan_attrs(pk)                    # fore channel
+    _chan_attrs(pk)                    # back channel
+    pk.uint32(0x40000000)              # csa_cb_program
+    pk.uint32(1)                       # csa_sec_parms<>: one AUTH_NONE
+    pk.uint32(nfsd.AUTH_NONE)
+    return pk.get()
+
+
+def op_sequence(sessionid, seq, slot):
+    pk = nfsd.Packer()
+    pk.uint32(nfsd.OP_SEQUENCE)
+    pk.opaque_fixed(sessionid)
+    pk.uint32(seq)
+    pk.uint32(slot)
+    pk.uint32(slot)                    # sa_highest_slotid
+    pk.boolean(False)                  # sa_cachethis
+    return pk.get()
+
+
+def skip_sequence_res(up):
+    up.uint32()                        # opnum
+    up.uint32()                        # status
+    up.opaque_fixed(nfsd.NFS4_SESSIONID_SIZE)
+    for _ in range(5):
+        up.uint32()                    # seqid/slot/highest/target/flags
+
+
+def op_open41_create(name):
+    pk = nfsd.Packer()
+    pk.uint32(nfsd.OP_OPEN)
+    pk.uint32(0)                       # seqid (ignored in 4.1)
+    pk.uint32(nfsd.OPEN4_SHARE_ACCESS_BOTH)
+    pk.uint32(nfsd.OPEN4_SHARE_DENY_NONE)
+    pk.uint64(0)                       # owner clientid (ignored in 4.1)
+    pk.opaque(b"smoke41-owner")
+    pk.uint32(nfsd.OPEN4_CREATE)
+    pk.uint32(nfsd.UNCHECKED4)
+    pk.uint32(0)                       # empty createattrs bitmap
+    pk.opaque(b"")
+    pk.uint32(nfsd.CLAIM_NULL)
+    pk.string(name)
+    return pk.get()
+
+
+def op_write41(sid, offset, data):
+    pk = nfsd.Packer()
+    pk.uint32(nfsd.OP_WRITE)
+    pk.raw(sid)
+    pk.uint64(offset)
+    pk.uint32(nfsd.FILE_SYNC4)
+    pk.opaque(data)
+    return pk.get()
+
+
+def op_close41(sid):
+    pk = nfsd.Packer()
+    pk.uint32(nfsd.OP_CLOSE)
+    pk.uint32(0)                       # seqid (ignored in 4.1)
+    pk.raw(sid)
+    return pk.get()
+
+
+def op_reclaim_complete():
+    pk = nfsd.Packer()
+    pk.uint32(nfsd.OP_RECLAIM_COMPLETE)
+    pk.boolean(False)                  # rca_one_fs
+    return pk.get()
+
+
+def op_secinfo_no_name():
+    pk = nfsd.Packer()
+    pk.uint32(nfsd.OP_SECINFO_NO_NAME)
+    pk.uint32(nfsd.SECINFO_STYLE4_CURRENT_FH)
+    return pk.get()
+
+
+def op_destroy_session(sessionid):
+    pk = nfsd.Packer()
+    pk.uint32(nfsd.OP_DESTROY_SESSION)
+    pk.opaque_fixed(sessionid)
+    return pk.get()
+
+
+def op_destroy_clientid(clientid):
+    pk = nfsd.Packer()
+    pk.uint32(nfsd.OP_DESTROY_CLIENTID)
+    pk.uint64(clientid)
+    return pk.get()
+
+
 def compound(sock, ops, minor=0, tag=b"smoke"):
     pk = nfsd.Packer()
     pk.opaque(tag)
@@ -287,16 +406,145 @@ def main():
           and not os.path.exists(os.path.join(export, "subdir")),
           "REMOVE directory")
 
-    # 8. minorversion 1 must be rejected with an empty resarray
-    st, n, up = compound(sock, [op_putrootfh()], minor=1)
+    # 8. minorversion 2 must be rejected with an empty resarray
+    st, n, up = compound(sock, [op_putrootfh()], minor=2)
     check(st == nfsd.NFS4ERR_MINOR_VERS_MISMATCH and n == 0,
-          "minorversion 1 rejected")
+          "minorversion 2 rejected")
 
     # 9. unknown opcode -> OP_ILLEGAL
     bad = nfsd.Packer()
     bad.uint32(9999)
     st, n, up = compound(sock, [op_putrootfh(), bad.get()])
     check(st == nfsd.NFS4ERR_OP_ILLEGAL, "unknown opcode -> OP_ILLEGAL")
+
+    # --- NFSv4.1 (sessions) ---------------------------------------------
+
+    # 10. a 4.1 compound not starting with SEQUENCE -> OP_NOT_IN_SESSION
+    st, n, up = compound(sock, [op_putrootfh()], minor=1)
+    check(st == nfsd.NFS4ERR_OP_NOT_IN_SESSION,
+          "4.1 first op not SEQUENCE -> OP_NOT_IN_SESSION")
+
+    # 11. EXCHANGE_ID
+    st, n, up = compound(sock, [op_exchange_id(b"\x01" * 8, b"smoke41")],
+                         minor=1)
+    check(st == nfsd.NFS4_OK, "EXCHANGE_ID status OK")
+    up.uint32()                        # opnum
+    up.uint32()                        # status
+    clientid = up.uint64()
+    eir_seq = up.uint32()
+    eir_flags = up.uint32()
+    check(up.uint32() == nfsd.SP4_NONE, "EXCHANGE_ID state_protect SP4_NONE")
+    up.uint64()                        # so_minor_id
+    up.opaque()                        # so_major_id
+    up.opaque()                        # eir_server_scope
+    check(up.uint32() == 0, "EXCHANGE_ID no server_impl_id")
+    check(eir_flags & nfsd.EXCHGID4_FLAG_USE_NON_PNFS != 0,
+          "EXCHANGE_ID advertises non-pNFS")
+
+    # 12. EXCHANGE_ID must be the only op of a sessionless compound
+    st, n, up = compound(sock, [op_exchange_id(b"\x01" * 8, b"smoke41"),
+                                op_putrootfh()], minor=1)
+    check(st == nfsd.NFS4ERR_NOT_ONLY_OP,
+          "EXCHANGE_ID + more ops -> NOT_ONLY_OP")
+
+    # 13. CREATE_SESSION
+    st, n, up = compound(sock, [op_create_session(clientid, eir_seq)],
+                         minor=1)
+    check(st == nfsd.NFS4_OK, "CREATE_SESSION status OK")
+    up.uint32()                        # opnum
+    up.uint32()                        # status
+    sessionid = up.opaque_fixed(nfsd.NFS4_SESSIONID_SIZE)
+    check(up.uint32() == eir_seq, "CREATE_SESSION echoes csa_sequence")
+    csr_flags = up.uint32()
+    check(csr_flags & nfsd.CREATE_SESSION4_FLAG_CONN_BACK_CHAN == 0,
+          "CREATE_SESSION grants no backchannel")
+    fore = [up.uint32() for _ in range(6)]
+    check(up.uint32() == 0, "fore channel rdma_ird empty")
+    nslots = fore[5]
+    check(1 <= nslots <= 64, "fore channel slot count sane")
+
+    # 14. SEQUENCE + PUTROOTFH + GETFH
+    st, n, up = compound(sock, [op_sequence(sessionid, 1, 0),
+                                op_putrootfh(), op_getfh()], minor=1)
+    check(st == nfsd.NFS4_OK, "SEQUENCE compound status OK")
+    reply1 = bytes(up.data[up.pos:])
+    up.uint32()                        # opnum SEQUENCE
+    up.uint32()                        # status
+    check(up.opaque_fixed(nfsd.NFS4_SESSIONID_SIZE) == sessionid,
+          "SEQUENCE echoes sessionid")
+    check(up.uint32() == 1, "SEQUENCE echoes seqid")
+    check(up.uint32() == 0, "SEQUENCE echoes slotid")
+
+    # 15. retransmission on the same slot/seqid replays the cached reply
+    st, n, up = compound(sock, [op_sequence(sessionid, 1, 0),
+                                op_putrootfh(), op_getfh()], minor=1)
+    reply2 = bytes(up.data[up.pos:])
+    check(reply1 == reply2, "same-slot retransmit replays cached reply")
+
+    # 16. mid-compound SEQUENCE -> SEQUENCE_POS
+    st, n, up = compound(sock, [op_sequence(sessionid, 2, 0),
+                                op_sequence(sessionid, 3, 1)], minor=1)
+    check(st == nfsd.NFS4ERR_SEQUENCE_POS,
+          "second SEQUENCE in compound -> SEQUENCE_POS")
+
+    # 17. OPEN(create) via 4.1: no CONFIRM rflag, WRITE with its stateid
+    st, n, up = compound(sock, [op_sequence(sessionid, 3, 0),
+                                op_putrootfh(),
+                                op_open41_create("file41.txt")], minor=1)
+    check(st == nfsd.NFS4_OK, "4.1 OPEN create status OK")
+    skip_sequence_res(up)
+    up.uint32(); up.uint32()           # PUTROOTFH opnum, status
+    up.uint32(); up.uint32()           # OPEN opnum, status
+    open_sid = up.opaque_fixed(16)     # stateid (seqid + other)
+    up.boolean(); up.uint64(); up.uint64()   # change_info4
+    rflags = up.uint32()
+    check(rflags & nfsd.OPEN4_RESULT_CONFIRM == 0,
+          "4.1 OPEN does not demand OPEN_CONFIRM")
+    nw = up.uint32()
+    for _ in range(nw):
+        up.uint32()                    # attrset bitmap words
+    check(up.uint32() == nfsd.OPEN_DELEGATE_NONE, "4.1 OPEN no delegation")
+
+    st, n, up = compound(sock, [op_sequence(sessionid, 4, 0),
+                                op_putrootfh(), op_lookup("file41.txt"),
+                                op_write41(open_sid, 0, b"v41 data")],
+                         minor=1)
+    check(st == nfsd.NFS4_OK, "4.1 WRITE with open stateid OK")
+    with open(os.path.join(export, "file41.txt"), "rb") as f:
+        check(f.read() == b"v41 data", "4.1 write visible on disk")
+
+    st, n, up = compound(sock, [op_sequence(sessionid, 5, 0),
+                                op_putrootfh(), op_lookup("file41.txt"),
+                                op_close41(open_sid)], minor=1)
+    check(st == nfsd.NFS4_OK, "4.1 CLOSE status OK")
+
+    # 18. RECLAIM_COMPLETE, then a repeat -> COMPLETE_ALREADY
+    st, n, up = compound(sock, [op_sequence(sessionid, 6, 0),
+                                op_reclaim_complete()], minor=1)
+    check(st == nfsd.NFS4_OK, "RECLAIM_COMPLETE OK")
+    st, n, up = compound(sock, [op_sequence(sessionid, 7, 0),
+                                op_reclaim_complete()], minor=1)
+    check(st == nfsd.NFS4ERR_COMPLETE_ALREADY,
+          "second RECLAIM_COMPLETE -> COMPLETE_ALREADY")
+
+    # 19. SECINFO_NO_NAME consumes the current filehandle
+    st, n, up = compound(sock, [op_sequence(sessionid, 8, 0),
+                                op_putrootfh(), op_secinfo_no_name(),
+                                op_getfh()], minor=1)
+    check(st == nfsd.NFS4ERR_NOFILEHANDLE and n == 4,
+          "SECINFO_NO_NAME consumes the filehandle")
+
+    # 20. DESTROY_SESSION, then SEQUENCE on it -> BADSESSION
+    st, n, up = compound(sock, [op_destroy_session(sessionid)], minor=1)
+    check(st == nfsd.NFS4_OK, "DESTROY_SESSION OK")
+    st, n, up = compound(sock, [op_sequence(sessionid, 9, 0),
+                                op_putrootfh()], minor=1)
+    check(st == nfsd.NFS4ERR_BADSESSION,
+          "SEQUENCE on destroyed session -> BADSESSION")
+
+    # 21. DESTROY_CLIENTID once sessionless
+    st, n, up = compound(sock, [op_destroy_clientid(clientid)], minor=1)
+    check(st == nfsd.NFS4_OK, "DESTROY_CLIENTID OK")
 
     sock.close()
     srv.shutdown()

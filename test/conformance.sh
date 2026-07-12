@@ -1,20 +1,32 @@
 #!/bin/bash
-# pynfs NFSv4.0 conformance run with a known-failures baseline.
+# pynfs NFSv4.0 / NFSv4.1 conformance run with a known-failures baseline.
 #
 # Runs the pynfs servertests suite against nfsd.py and compares the set of
-# failing test codes with test/pynfs-known-failures.txt:
+# failing test codes with the per-minor-version baseline file:
 #   - a failure NOT in the baseline is a REGRESSION -> exit 1
 #   - a baseline entry that now passes is reported (tighten the baseline)
 #
 # usage: bash test/conformance.sh [port]
-# env:   PYNFS_DIR (default /tmp/pynfs) - pynfs checkout, cloned if missing
+# env:   MINOR     (default 0) - 0 runs pynfs nfs4.0, 1 runs pynfs nfs4.1
+#        PYNFS_DIR (default /tmp/pynfs) - pynfs checkout, cloned if missing
 #        REPO      (default: parent of this script) - nfsd-py checkout
 set +e
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=${REPO:-$(dirname "$HERE")}
 PORT=${1:-12061}
+MINOR=${MINOR:-0}
 PYNFS_DIR=${PYNFS_DIR:-/tmp/pynfs}
-BASELINE="$REPO/test/pynfs-known-failures.txt"
+if [ "$MINOR" = "1" ]; then
+  SUITE=nfs4.1
+  MINOR_ARGS=--minorversion=1
+  BASELINE="$REPO/test/pynfs41-known-failures.txt"
+  MIN_PASS=100
+else
+  SUITE=nfs4.0
+  MINOR_ARGS=
+  BASELINE="$REPO/test/pynfs-known-failures.txt"
+  MIN_PASS=400
+fi
 OUT=/tmp/pynfs-conformance.txt
 LOG=/tmp/nfsdpy-conformance.log
 
@@ -47,8 +59,8 @@ done
 [ "$up" = "1" ] || { echo "FATAL: server did not start"; tail -20 "$LOG"; exit 1; }
 
 # --- run the suite ---
-cd "$PYNFS_DIR/nfs4.0" || exit 1
-timeout 2400 python3 -u testserver.py "127.0.0.1:$PORT/" \
+cd "$PYNFS_DIR/$SUITE" || exit 1
+timeout 2400 python3 -u testserver.py "127.0.0.1:$PORT/" $MINOR_ARGS \
   --maketree --rundeps --hidepass all > "$OUT" 2>&1
 rc=$?
 sudo pkill -f "nfsd.py.*-port $PORT" 2>/dev/null
@@ -74,7 +86,7 @@ if [ -n "$FIXED" ]; then
 fi
 
 PASSED=$(grep -oE '[0-9]+ Passed' "$OUT" | awk '{print $1}')
-if [ -z "$PASSED" ] || [ "$PASSED" -lt 400 ]; then
+if [ -z "$PASSED" ] || [ "$PASSED" -lt "$MIN_PASS" ]; then
   echo "FATAL: implausible pass count '$PASSED' (suite broken?)"
   exit 1
 fi

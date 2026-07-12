@@ -60,9 +60,13 @@ jobs:
         run: cat /tmp/nfsdpy-12049.log || true
 
   conformance-pynfs:
-    name: pynfs NFSv4.0 conformance (baseline diff)
+    name: pynfs NFSv4.${{ matrix.minor }} conformance (baseline diff)
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        minor: [ 0, 1 ]
     steps:
       - uses: actions/checkout@v7
 
@@ -70,7 +74,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y python3-ply
 
       - name: Run conformance suite against known-failures baseline
-        run: bash test/conformance.sh 12061
+        run: MINOR=${{ matrix.minor }} bash test/conformance.sh 12061
 
       - name: Full pynfs output
         if: always()

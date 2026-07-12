@@ -4,6 +4,10 @@
 Sources (downloaded verbatim into spec/):
   - RFC 7531: NFSv4.0 external data representation (XDR) description.
     The XDR is embedded in lines prefixed with "///" (code-extraction format).
+  - RFC 5662: NFSv4.1 XDR description (same "///" format). A superset of the
+    4.0 protocol: names already defined by RFC 7531 are checked for value
+    equality (a mismatch aborts generation), and only 4.1-new names are
+    emitted in the RFC 5662 sections.
   - RFC 5531: ONC RPC v2 protocol specification (msg_type, reply_stat,
     accept_stat, reject_stat, auth_stat, auth_flavor enums).
 
@@ -42,8 +46,11 @@ def load(name):
         return f.read()
 
 
-def extract_rfc7531_xdr(text):
-    """Strip the '///' code-extraction prefix to recover the pure .x file."""
+def extract_slashed_xdr(text):
+    """Strip the '///' code-extraction prefix to recover the pure .x file.
+
+    Both RFC 7531 (NFSv4.0) and RFC 5662 (NFSv4.1) embed their XDR this way.
+    """
     out = []
     for line in text.splitlines():
         m = re.match(r"^\s*///( ?)(.*)$", line)
@@ -123,21 +130,29 @@ def emit():
     lines = [BEGIN]
     lines.append("# Machine-extracted from the IETF specifications:")
     lines.append("#   RFC 7531 (NFSv4.0 XDR)  -> spec/rfc7531.txt")
+    lines.append("#   RFC 5662 (NFSv4.1 XDR)  -> spec/rfc5662.txt (4.1-new names only)")
     lines.append("#   RFC 5531 (ONC RPC v2)   -> spec/rfc5531.txt")
     lines.append("# Regenerate with: python3 tools/gen_constants.py --splice nfsd.py")
     seen = {}
 
-    def add(name, value, origin):
+    def check(name, value):
+        """Record name=value; abort on a cross-spec value mismatch.
+
+        Returns True when the name is new (should be emitted)."""
         if name in seen:
             if seen[name] != value:
                 raise SystemExit(
                     "conflict: %s = %r vs %r" % (name, seen[name], value)
                 )
-            return
+            return False
         seen[name] = value
-        lines.append("%s = %d" % (name, value))
+        return True
 
-    x4 = strip_comments(extract_rfc7531_xdr(load("rfc7531.txt")))
+    def add(name, value, origin):
+        if check(name, value):
+            lines.append("%s = %d" % (name, value))
+
+    x4 = strip_comments(extract_slashed_xdr(load("rfc7531.txt")))
 
     lines.append("")
     lines.append("# --- RFC 7531 top-level consts ---")
@@ -159,6 +174,39 @@ def emit():
         for n, v in procs:
             add(n, v, "rfc7531")
 
+    # RFC 5662 (NFSv4.1): same "///" embedding. Overlapping names are value
+    # checked against RFC 7531 by check(); only 4.1-new names get emitted.
+    x41 = strip_comments(extract_slashed_xdr(load("rfc5662.txt")))
+
+    fresh = [(n, v) for n, v in parse_consts(x41) if n not in seen]
+    if fresh:
+        lines.append("")
+        lines.append("# --- RFC 5662 top-level consts (NFSv4.1-new) ---")
+    for n, v in parse_consts(x41):
+        add(n, v, "rfc5662")
+
+    enums41 = parse_enums(x41)
+    for name, entries in enums41:
+        fresh = [(n, v) for n, v in entries if n not in seen]
+        # Value-check every entry (even dupes) so a 4.0/4.1 spec mismatch
+        # aborts, but only open a section for enums that add new names.
+        if fresh:
+            lines.append("")
+            lines.append("# --- RFC 5662 enum %s (NFSv4.1-new members) ---" % name)
+        for n, v in entries:
+            add(n, v, "rfc5662")
+
+    for prog_name, prog_num, vers_name, vers_num, procs in parse_programs(x41):
+        fresh = ([(prog_name, prog_num), (vers_name, vers_num)] + procs)
+        fresh = [(n, v) for n, v in fresh if n not in seen]
+        if fresh:
+            lines.append("")
+            lines.append("# --- RFC 5662 program declaration: %s ---" % prog_name)
+        add(prog_name, prog_num, "rfc5662")
+        add(vers_name, vers_num, "rfc5662")
+        for n, v in procs:
+            add(n, v, "rfc5662")
+
     x5 = strip_comments(clean_rfc5531(load("rfc5531.txt")))
     for name, entries in parse_enums(x5):
         if name not in RFC5531_ENUM_WHITELIST:
@@ -168,16 +216,26 @@ def emit():
         for n, v in entries:
             add(n, v, "rfc5531")
 
-    # Reverse-lookup maps for logging.
+    # Reverse-lookup maps for logging, merged across RFC 7531 + RFC 5662
+    # (RFC 5662's nfs_opnum4/nfsstat4 are supersets covering the 4.1 ops
+    # and errors; identical values dedupe, mismatches abort).
     for enum_name, py_name in (("nfsstat4", "NFSSTAT4_NAMES"),
                                ("nfs_opnum4", "OP_NAMES")):
-        for name, entries in enums4:
+        merged = {}
+        for name, entries in list(enums4) + list(enums41):
             if name == enum_name:
-                lines.append("")
-                lines.append("%s = {" % py_name)
                 for n, v in entries:
-                    lines.append("    %d: %r," % (v, n))
-                lines.append("}")
+                    if v in merged and merged[v] != n:
+                        raise SystemExit(
+                            "reverse-map conflict in %s: %d = %s vs %s"
+                            % (enum_name, v, merged[v], n)
+                        )
+                    merged[v] = n
+        lines.append("")
+        lines.append("%s = {" % py_name)
+        for v in sorted(merged):
+            lines.append("    %d: %r," % (v, merged[v]))
+        lines.append("}")
 
     lines.append(END)
     return "\n".join(lines) + "\n"

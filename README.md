@@ -4,17 +4,18 @@
 [![pynfs conformance](https://img.shields.io/badge/pynfs%20NFSv4.0-589%20passed%2C%200%20failed-brightgreen)](test/pynfs-known-failures.txt)
 [![python](https://img.shields.io/badge/python-3.8%2B%20stdlib%20only-blue)](nfsd.py)
 
-A cross-platform, **user-space NFSv4.0 server in one pure-Python file**.
-Point it at a local directory and a TCP port, and any NFSv4.0 client can
-mount it.
+A cross-platform, **user-space NFSv4.0 / NFSv4.1 server in one pure-Python
+file**. Point it at a local directory and a TCP port, and any NFSv4.0 or
+NFSv4.1 client can mount it.
 
 - **Standard library only.** No third-party packages, no C extensions, no
   kernel module, no FUSE. Just sockets and basic filesystem operations.
 - **Single file.** Copy `nfsd.py` anywhere Python 3.8+ runs (Linux, Windows,
   macOS) and start it.
 - **Spec-derived protocol tables.** Every protocol constant is
-  machine-extracted from RFC 7531 (NFSv4.0 XDR) and RFC 5531 (ONC RPC) by
-  `tools/gen_constants.py` -- no hand-typed magic numbers.
+  machine-extracted from RFC 7531 (NFSv4.0 XDR), RFC 5662 (NFSv4.1 XDR) and
+  RFC 5531 (ONC RPC) by `tools/gen_constants.py` -- no hand-typed magic
+  numbers.
 
 ## Usage
 
@@ -22,9 +23,10 @@ mount it.
 python3 nfsd.py -dir /path/to/export -port 2049
 ```
 
-Mount from Linux:
+Mount from Linux (vers=4.1 sessions or vers=4.0 both work):
 
 ```sh
+sudo mount -t nfs -o vers=4.1,port=2049,proto=tcp,sec=sys HOST:/ /mnt/x
 sudo mount -t nfs -o vers=4.0,port=2049,proto=tcp,sec=sys HOST:/ /mnt/x
 ```
 
@@ -64,6 +66,15 @@ unprivileged on a port >= 1024.
   CLOSE, READ, WRITE, COMMIT, CREATE (dir/symlink/fifo), REMOVE, RENAME,
   LINK, SECINFO, LOCK/LOCKT/LOCKU (in-memory byte-range locks),
   RELEASE_LOCKOWNER.
+- NFSv4.1 (RFC 5661) minimal session support: EXCHANGE_ID, CREATE_SESSION,
+  SEQUENCE with a per-slot exactly-once reply cache, BIND_CONN_TO_SESSION,
+  DESTROY_SESSION, DESTROY_CLIENTID, RECLAIM_COMPLETE, SECINFO_NO_NAME,
+  FREE_STATEID, TEST_STATEID, OPEN by CLAIM_FH and EXCLUSIVE4_1 create,
+  and the suppattr_exclcreat attribute. Sessions renew the lease
+  implicitly; 4.1 compounds ignore owner seqids per the spec. Fore
+  channel only: no backchannel, so no delegations are ever granted (the
+  server never sets CONN_BACK_CHAN); pNFS/layout ops, SSV, and
+  RPCSEC_GSS answer NFS4ERR_NOTSUPP.
 - Attributes: 41 fattr4 attributes incl. mode/owner/group/times/space/statfs.
 - An open-file descriptor cache, so streams of READ/WRITE ops reuse one
   descriptor instead of open/close per RPC (the dominant write cost).
@@ -72,10 +83,12 @@ unprivileged on a port >= 1024.
   Windows), symlink-privilege probe.
 
 Verified end to end against the Linux kernel client (see `test/e2e.sh`,
-26 checks: mount, read/write, 8 MiB checksum round-trip, chmod/chown/
-truncate/mtime, rename incl. directory rename, symlink/hardlink, flock
-contention, 300-entry readdir, statfs). Loopback throughput on a dev
-machine: ~266 MB/s write, ~168 MB/s read -- well above gigabit line rate.
+35 checks: vers=4.0 mount, read/write, 8 MiB checksum round-trip,
+chmod/chown/truncate/mtime, rename incl. directory rename, symlink/
+hardlink, flock contention, 300-entry readdir, statfs -- then a vers=4.1
+re-mount exercising the same core paths over sessions). Loopback
+throughput on a dev machine: ~266 MB/s write, ~168 MB/s read -- well
+above gigabit line rate.
 
 ## Testing
 
@@ -121,8 +134,10 @@ baseline can be tightened.
 python3 tools/gen_constants.py --splice nfsd.py
 ```
 
-reads `spec/rfc7531.txt` / `spec/rfc5531.txt` (verbatim IETF documents,
-included) and replaces the generated block in `nfsd.py`.
+reads `spec/rfc7531.txt` / `spec/rfc5662.txt` / `spec/rfc5531.txt`
+(verbatim IETF documents, included) and replaces the generated block in
+`nfsd.py`. Names shared by the 4.0 and 4.1 XDR are cross-checked for value
+equality during generation; a mismatch aborts.
 
 ## Design notes
 
@@ -138,8 +153,10 @@ included) and replaces the generated block in `nfsd.py`.
 
 ## Known limitations
 
-- NFSv4.0 only (minorversion 0). No NFSv3 (so the native Windows NFS
-  *client* cannot mount this; it is v2/v3 only). No delegations, no
+- NFSv4.0 and NFSv4.1 only (no NFSv4.2, no NFSv3 -- so the native Windows
+  NFS *client* cannot mount this; it is v2/v3 only). No delegations, no
   Kerberos (AUTH_SYS trusts client-asserted uid/gid, standard LAN model).
+- NFSv4.1 is the minimal profile: fore channel only (no backchannel /
+  callbacks), no pNFS, no SSV state protection, no session persistence.
 - No cross-restart handle persistence; no grace-period reclaim.
 - ACLs are not supported (mode bits only).
