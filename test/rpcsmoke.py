@@ -36,15 +36,15 @@ def check(cond, label):
 _xid = [100]
 
 
-def rpc_call(sock, proc, body, cred_uid=0, cred_gid=0):
+def rpc_call(sock, proc, body, cred_uid=0, cred_gid=0, prog=None, vers=None):
     _xid[0] += 1
     xid = _xid[0]
     pk = nfsd.Packer()
     pk.uint32(xid)
     pk.uint32(nfsd.CALL)
     pk.uint32(nfsd.RPC_VERS)
-    pk.uint32(nfsd.NFS4_PROGRAM)
-    pk.uint32(nfsd.NFS_V4)
+    pk.uint32(nfsd.NFS4_PROGRAM if prog is None else prog)
+    pk.uint32(nfsd.NFS_V4 if vers is None else vers)
     pk.uint32(proc)
     cred = nfsd.Packer()
     cred.uint32(0)                 # stamp
@@ -556,6 +556,200 @@ def main():
     # 22. DESTROY_CLIENTID once sessionless
     st, n, up = compound(sock, [op_destroy_clientid(clientid)], minor=1)
     check(st == nfsd.NFS4_OK, "DESTROY_CLIENTID OK")
+
+    # --- NFSv3 (RFC 1813) + MOUNT v3 --------------------------------------
+
+    def v3(proc, body=b""):
+        return rpc_call(sock, proc, body,
+                        prog=nfsd.NFS_PROGRAM, vers=nfsd.NFS_V3)
+
+    def m3(proc, body=b""):
+        return rpc_call(sock, proc, body,
+                        prog=nfsd.MOUNT_PROGRAM, vers=nfsd.MOUNT_V3)
+
+    def skip_fattr3(up):
+        up.opaque_fixed(84)            # fattr3 is a fixed 84-byte struct
+
+    def skip_post_attr(up):
+        if up.boolean():
+            skip_fattr3(up)
+
+    def skip_wcc(up):
+        if up.boolean():
+            up.opaque_fixed(24)        # wcc_attr: size + mtime + ctime
+        skip_post_attr(up)
+
+    # 23. MOUNT: NULL, then MNT of "/" returns the root filehandle
+    m3(nfsd.MOUNTPROC3_NULL)
+    check(True, "MOUNT3 NULL ping")
+    pk = nfsd.Packer()
+    pk.string("/")
+    up = m3(nfsd.MOUNTPROC3_MNT, pk.get())
+    check(up.uint32() == nfsd.MNT3_OK, "MOUNT3 MNT status OK")
+    fh3 = up.opaque()
+    check(len(fh3) == 8, "MOUNT3 MNT returns 8-byte root fh")
+    nfl = up.uint32()
+    flavors = [up.uint32() for _ in range(nfl)]
+    check(nfsd.AUTH_SYS in flavors, "MOUNT3 MNT offers AUTH_SYS")
+
+    # 24. NFS3 NULL + GETATTR of the root
+    v3(nfsd.NFSPROC3_NULL)
+    check(True, "NFS3 NULL ping")
+    pk = nfsd.Packer()
+    pk.opaque(fh3)
+    up = v3(nfsd.NFSPROC3_GETATTR, pk.get())
+    check(up.uint32() == nfsd.NFS3_OK, "NFS3 GETATTR status OK")
+    check(up.uint32() == nfsd.NF3DIR, "NFS3 root type is NF3DIR")
+
+    # 25. CREATE (UNCHECKED, mode 0644) + WRITE + READ round-trip
+    pk = nfsd.Packer()
+    pk.opaque(fh3)
+    pk.string("file3.txt")
+    pk.uint32(nfsd.UNCHECKED)
+    pk.boolean(True); pk.uint32(0o644)   # sattr3.mode
+    pk.boolean(False); pk.boolean(False); pk.boolean(False)
+    pk.uint32(nfsd.DONT_CHANGE); pk.uint32(nfsd.DONT_CHANGE)
+    up = v3(nfsd.NFSPROC3_CREATE, pk.get())
+    check(up.uint32() == nfsd.NFS3_OK, "NFS3 CREATE status OK")
+    check(up.boolean(), "NFS3 CREATE returns a filehandle")
+    fh_file = up.opaque()
+
+    pk = nfsd.Packer()
+    pk.opaque(fh_file)
+    pk.uint64(0)
+    pk.uint32(9)
+    pk.uint32(nfsd.FILE_SYNC)
+    pk.opaque(b"v3 hello!")
+    up = v3(nfsd.NFSPROC3_WRITE, pk.get())
+    check(up.uint32() == nfsd.NFS3_OK, "NFS3 WRITE status OK")
+    skip_wcc(up)
+    check(up.uint32() == 9, "NFS3 WRITE count 9")
+    check(up.uint32() == nfsd.FILE_SYNC, "NFS3 WRITE committed FILE_SYNC")
+    with open(os.path.join(export, "file3.txt"), "rb") as f:
+        check(f.read() == b"v3 hello!", "NFS3 write visible on disk")
+
+    pk = nfsd.Packer()
+    pk.opaque(fh_file)
+    pk.uint64(0)
+    pk.uint32(100)
+    up = v3(nfsd.NFSPROC3_READ, pk.get())
+    check(up.uint32() == nfsd.NFS3_OK, "NFS3 READ status OK")
+    skip_post_attr(up)
+    up.uint32()                          # count
+    eof3 = up.boolean()
+    check(up.opaque() == b"v3 hello!" and eof3, "NFS3 READ data + eof")
+
+    # 26. LOOKUP finds it; SETATTR mode 0640 round-trips via GETATTR
+    pk = nfsd.Packer()
+    pk.opaque(fh3)
+    pk.string("file3.txt")
+    up = v3(nfsd.NFSPROC3_LOOKUP, pk.get())
+    check(up.uint32() == nfsd.NFS3_OK, "NFS3 LOOKUP status OK")
+    check(up.opaque() == fh_file, "NFS3 LOOKUP returns same fh")
+
+    pk = nfsd.Packer()
+    pk.opaque(fh_file)
+    pk.boolean(True); pk.uint32(0o640)   # sattr3.mode
+    pk.boolean(False); pk.boolean(False); pk.boolean(False)
+    pk.uint32(nfsd.DONT_CHANGE); pk.uint32(nfsd.DONT_CHANGE)
+    pk.boolean(False)                    # sattrguard3: no check
+    up = v3(nfsd.NFSPROC3_SETATTR, pk.get())
+    check(up.uint32() == nfsd.NFS3_OK, "NFS3 SETATTR status OK")
+    pk = nfsd.Packer()
+    pk.opaque(fh_file)
+    up = v3(nfsd.NFSPROC3_GETATTR, pk.get())
+    up.uint32()                          # status
+    up.uint32()                          # type
+    check(up.uint32() == 0o640, "NFS3 SETATTR mode round-trip")
+
+    # 27. MKDIR + READDIRPLUS lists both entries
+    pk = nfsd.Packer()
+    pk.opaque(fh3)
+    pk.string("dir3")
+    pk.boolean(False); pk.boolean(False); pk.boolean(False); pk.boolean(False)
+    pk.uint32(nfsd.DONT_CHANGE); pk.uint32(nfsd.DONT_CHANGE)
+    up = v3(nfsd.NFSPROC3_MKDIR, pk.get())
+    check(up.uint32() == nfsd.NFS3_OK, "NFS3 MKDIR status OK")
+
+    pk = nfsd.Packer()
+    pk.opaque(fh3)
+    pk.uint64(0)
+    pk.opaque_fixed(b"\0" * 8)
+    pk.uint32(4096)
+    pk.uint32(65536)
+    up = v3(nfsd.NFSPROC3_READDIRPLUS, pk.get())
+    check(up.uint32() == nfsd.NFS3_OK, "NFS3 READDIRPLUS status OK")
+    skip_post_attr(up)
+    up.opaque_fixed(8)                   # cookieverf
+    seen = []
+    while up.boolean():
+        up.uint64()                      # fileid
+        seen.append(up.string())
+        up.uint64()                      # cookie
+        skip_post_attr(up)
+        if up.boolean():
+            up.opaque()                  # name_handle
+    up.boolean()                         # eof
+    check(sorted(seen) >= ["dir3"] and "file3.txt" in seen,
+          "NFS3 READDIRPLUS lists entries")
+
+    # 28. FSINFO / PATHCONF / FSSTAT / ACCESS
+    pk = nfsd.Packer()
+    pk.opaque(fh3)
+    up = v3(nfsd.NFSPROC3_FSINFO, pk.get())
+    check(up.uint32() == nfsd.NFS3_OK, "NFS3 FSINFO status OK")
+    skip_post_attr(up)
+    check(up.uint32() == nfsd.MAXIO, "NFS3 FSINFO rtmax")
+
+    pk = nfsd.Packer()
+    pk.opaque(fh3)
+    up = v3(nfsd.NFSPROC3_PATHCONF, pk.get())
+    check(up.uint32() == nfsd.NFS3_OK, "NFS3 PATHCONF status OK")
+
+    pk = nfsd.Packer()
+    pk.opaque(fh3)
+    up = v3(nfsd.NFSPROC3_FSSTAT, pk.get())
+    check(up.uint32() == nfsd.NFS3_OK, "NFS3 FSSTAT status OK")
+
+    pk = nfsd.Packer()
+    pk.opaque(fh_file)
+    pk.uint32(nfsd.ACCESS3_READ | nfsd.ACCESS3_MODIFY)
+    up = v3(nfsd.NFSPROC3_ACCESS, pk.get())
+    check(up.uint32() == nfsd.NFS3_OK, "NFS3 ACCESS status OK")
+    skip_post_attr(up)
+    check(up.uint32() & nfsd.ACCESS3_READ, "NFS3 ACCESS grants READ")
+
+    # 29. RENAME, then REMOVE + RMDIR clean up; LOOKUP -> NOENT
+    pk = nfsd.Packer()
+    pk.opaque(fh3)
+    pk.string("file3.txt")
+    pk.opaque(fh3)
+    pk.string("file3-renamed.txt")
+    up = v3(nfsd.NFSPROC3_RENAME, pk.get())
+    check(up.uint32() == nfsd.NFS3_OK, "NFS3 RENAME status OK")
+
+    pk = nfsd.Packer()
+    pk.opaque(fh3)
+    pk.string("file3-renamed.txt")
+    up = v3(nfsd.NFSPROC3_REMOVE, pk.get())
+    check(up.uint32() == nfsd.NFS3_OK, "NFS3 REMOVE status OK")
+
+    pk = nfsd.Packer()
+    pk.opaque(fh3)
+    pk.string("dir3")
+    up = v3(nfsd.NFSPROC3_RMDIR, pk.get())
+    check(up.uint32() == nfsd.NFS3_OK, "NFS3 RMDIR status OK")
+
+    pk = nfsd.Packer()
+    pk.opaque(fh3)
+    pk.string("file3.txt")
+    up = v3(nfsd.NFSPROC3_LOOKUP, pk.get())
+    check(up.uint32() == nfsd.NFS3ERR_NOENT, "NFS3 LOOKUP gone -> NOENT")
+
+    # 30. MOUNT EXPORT lists "/"
+    up = m3(nfsd.MOUNTPROC3_EXPORT)
+    check(up.boolean() and up.string() == "/",
+          "MOUNT3 EXPORT lists the root")
 
     sock.close()
     srv.shutdown()

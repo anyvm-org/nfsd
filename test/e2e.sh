@@ -138,8 +138,38 @@ n=$(ls "$MNT/bigdir" | wc -l)
 # --- df ---
 sudo df "$MNT" > /dev/null; check $? "statfs (df)"
 
+# --- NFSv3 re-mount (MOUNT protocol on the same port, no rpcbind) ---
+sudo umount "$MNT"; check $? "umount before v3"
+timeout 30 sudo mount -t nfs \
+  -o "vers=3,port=$PORT,mountport=$PORT,mountproto=tcp,proto=tcp,nolock,soft,timeo=50,retrans=2" \
+  "127.0.0.1:/" "$MNT"
+check $? "mount vers=3"
+grep " $(echo "$MNT" | sed 's/[.[\*^$]/\\&/g') " /proc/mounts \
+  | grep -q "vers=3"; check $? "negotiated vers=3"
+[ "$(cat "$MNT/hello.txt" 2>/dev/null)" = "hello from nfsd.py" ]
+check $? "v3 read"
+echo "over v3" | sudo tee "$MNT/w3.txt" > /dev/null
+[ "$(cat "$EXP/w3.txt" 2>/dev/null)" = "over v3" ]
+check $? "v3 write"
+sudo cp /tmp/nfsdpy-rnd.bin "$MNT/rnd3.bin"
+a3=$(sha256sum /tmp/nfsdpy-rnd.bin | awk '{print $1}')
+b3=$(sudo sha256sum "$MNT/rnd3.bin" | awk '{print $1}')
+[ "$a3" = "$b3" ]; check $? "v3 8 MiB sha256 round-trip"
+sudo mkdir "$MNT/d3" && echo deep3 | sudo tee "$MNT/d3/deep.txt" >/dev/null
+[ "$(cat "$EXP/d3/deep.txt" 2>/dev/null)" = "deep3" ]
+check $? "v3 mkdir + create in subdir"
+sudo chmod 0640 "$MNT/w3.txt"
+[ "$(sudo stat -c %a "$MNT/w3.txt")" = "640" ]; check $? "v3 chmod"
+sudo ln -s hello.txt "$MNT/lnk3" && \
+  [ "$(sudo readlink "$MNT/lnk3")" = "hello.txt" ]; check $? "v3 symlink"
+sudo mv "$MNT/w3.txt" "$MNT/w3r.txt" && [ -f "$EXP/w3r.txt" ]
+check $? "v3 rename"
+n3=$(ls "$MNT" | wc -l)
+sudo rm "$MNT/w3r.txt" "$MNT/rnd3.bin" "$MNT/lnk3" "$MNT/d3/deep.txt"
+sudo rmdir "$MNT/d3"; check $? "v3 unlink + rmdir"
+
 # --- NFSv4.1 (sessions) re-mount ---
-sudo umount "$MNT"; check $? "umount vers=4.0"
+sudo umount "$MNT"; check $? "umount before v4.1"
 timeout 30 sudo mount -t nfs \
   -o "vers=4.1,port=$PORT,proto=tcp,sec=sys,soft,timeo=50,retrans=2" \
   "127.0.0.1:/" "$MNT"

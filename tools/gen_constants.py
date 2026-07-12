@@ -10,6 +10,10 @@ Sources (downloaded verbatim into spec/):
     emitted in the RFC 5662 sections.
   - RFC 5531: ONC RPC v2 protocol specification (msg_type, reply_stat,
     accept_stat, reject_stat, auth_stat, auth_flavor enums).
+  - RFC 1813: NFS version 3 protocol. Its XDR is embedded as indented
+    plain-text blocks (const/enum/program declarations parse with the
+    same regexes once page furniture is stripped); the sec 2.4 size
+    constants use a bare "NAME value" prose form with its own regex.
 
 Every const, enum, and the program/version/procedure declaration is extracted
 mechanically -- nothing is typed from memory -- so the generated values are
@@ -71,6 +75,49 @@ def clean_rfc5531(text):
             continue
         out.append(line)
     return "\n".join(out)
+
+
+def clean_rfc1813(text):
+    """Drop page furniture (form feeds, running headers/footers)."""
+    out = []
+    for line in text.splitlines():
+        if "\f" in line:
+            continue
+        if re.match(r"^\s*Callaghan\b", line):
+            continue
+        if re.match(r"^\s*RFC 1813\b", line):
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
+def parse_rfc1813_sizes(text):
+    """Extract the section 2.4 size constants (bare 'NAME value' form)."""
+    return [
+        (n, int(v))
+        for n, v in re.findall(
+            r"^   (NFS3_[A-Z0-9_]+)\s+(\d+)\s*$", text, flags=re.M
+        )
+    ]
+
+
+def parse_rfc1813_programs(x):
+    """Parse RFC 1813's indented single-version program declarations."""
+    out = []
+    for m in re.finditer(
+        r"\bprogram\s+(\w+)\s*\{\s*version\s+(\w+)\s*\{(.*?)\}\s*=\s*(\d+)\s*;"
+        r"\s*\}\s*=\s*(\d+)\s*;",
+        x,
+        flags=re.S,
+    ):
+        prog_name, vers_name, vbody = m.group(1), m.group(2), m.group(3)
+        vers_num, prog_num = int(m.group(4)), int(m.group(5))
+        procs = [
+            (n, int(v))
+            for n, v in re.findall(r"(\w+)\s*\(\w+\)\s*=\s*(\d+)\s*;", vbody)
+        ]
+        out.append((prog_name, prog_num, vers_name, vers_num, procs))
+    return out
 
 
 def strip_comments(x):
@@ -206,6 +253,38 @@ def emit():
         add(vers_name, vers_num, "rfc5662")
         for n, v in procs:
             add(n, v, "rfc5662")
+
+    # RFC 1813 (NFSv3): indented plain-text XDR blocks.
+    x3 = strip_comments(clean_rfc1813(load("rfc1813.txt")))
+
+    lines.append("")
+    lines.append("# --- RFC 1813 sec 2.4 size constants ---")
+    for n, v in parse_rfc1813_sizes(x3):
+        add(n, v, "rfc1813")
+
+    fresh = [(n, v) for n, v in parse_consts(x3) if n not in seen]
+    if fresh:
+        lines.append("")
+        lines.append("# --- RFC 1813 top-level consts ---")
+    for n, v in parse_consts(x3):
+        add(n, v, "rfc1813")
+
+    for name, entries in parse_enums(x3):
+        fresh = [(n, v) for n, v in entries if n not in seen]
+        if fresh:
+            lines.append("")
+            lines.append("# --- RFC 1813 enum %s ---" % name)
+        for n, v in entries:
+            add(n, v, "rfc1813")
+
+    for prog_name, prog_num, vers_name, vers_num, procs in \
+            parse_rfc1813_programs(x3):
+        lines.append("")
+        lines.append("# --- RFC 1813 program declaration: %s ---" % prog_name)
+        add(prog_name, prog_num, "rfc1813")
+        add(vers_name, vers_num, "rfc1813")
+        for n, v in procs:
+            add(n, v, "rfc1813")
 
     x5 = strip_comments(clean_rfc5531(load("rfc5531.txt")))
     for name, entries in parse_enums(x5):

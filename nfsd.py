@@ -624,6 +624,142 @@ OP_CB_WANTS_CANCELLED = 12
 OP_CB_NOTIFY_LOCK = 13
 OP_CB_NOTIFY_DEVICEID = 14
 
+# --- RFC 1813 sec 2.4 size constants ---
+NFS3_FHSIZE = 64
+NFS3_COOKIEVERFSIZE = 8
+NFS3_CREATEVERFSIZE = 8
+NFS3_WRITEVERFSIZE = 8
+
+# --- RFC 1813 top-level consts ---
+ACCESS3_READ = 1
+ACCESS3_LOOKUP = 2
+ACCESS3_MODIFY = 4
+ACCESS3_EXTEND = 8
+ACCESS3_DELETE = 16
+ACCESS3_EXECUTE = 32
+FSF3_LINK = 1
+FSF3_SYMLINK = 2
+FSF3_HOMOGENEOUS = 8
+FSF3_CANSETTIME = 16
+MNTPATHLEN = 1024
+MNTNAMLEN = 255
+FHSIZE3 = 64
+
+# --- RFC 1813 enum nfsstat3 ---
+NFS3_OK = 0
+NFS3ERR_PERM = 1
+NFS3ERR_NOENT = 2
+NFS3ERR_IO = 5
+NFS3ERR_NXIO = 6
+NFS3ERR_ACCES = 13
+NFS3ERR_EXIST = 17
+NFS3ERR_XDEV = 18
+NFS3ERR_NODEV = 19
+NFS3ERR_NOTDIR = 20
+NFS3ERR_ISDIR = 21
+NFS3ERR_INVAL = 22
+NFS3ERR_FBIG = 27
+NFS3ERR_NOSPC = 28
+NFS3ERR_ROFS = 30
+NFS3ERR_MLINK = 31
+NFS3ERR_NAMETOOLONG = 63
+NFS3ERR_NOTEMPTY = 66
+NFS3ERR_DQUOT = 69
+NFS3ERR_STALE = 70
+NFS3ERR_REMOTE = 71
+NFS3ERR_BADHANDLE = 10001
+NFS3ERR_NOT_SYNC = 10002
+NFS3ERR_BAD_COOKIE = 10003
+NFS3ERR_NOTSUPP = 10004
+NFS3ERR_TOOSMALL = 10005
+NFS3ERR_SERVERFAULT = 10006
+NFS3ERR_BADTYPE = 10007
+NFS3ERR_JUKEBOX = 10008
+
+# --- RFC 1813 enum ftype3 ---
+NF3REG = 1
+NF3DIR = 2
+NF3BLK = 3
+NF3CHR = 4
+NF3LNK = 5
+NF3SOCK = 6
+NF3FIFO = 7
+
+# --- RFC 1813 enum time_how ---
+DONT_CHANGE = 0
+SET_TO_SERVER_TIME = 1
+SET_TO_CLIENT_TIME = 2
+
+# --- RFC 1813 enum stable_how ---
+UNSTABLE = 0
+DATA_SYNC = 1
+FILE_SYNC = 2
+
+# --- RFC 1813 enum createmode3 ---
+UNCHECKED = 0
+GUARDED = 1
+EXCLUSIVE = 2
+
+# --- RFC 1813 enum mountstat3 ---
+MNT3_OK = 0
+MNT3ERR_PERM = 1
+MNT3ERR_NOENT = 2
+MNT3ERR_IO = 5
+MNT3ERR_ACCES = 13
+MNT3ERR_NOTDIR = 20
+MNT3ERR_INVAL = 22
+MNT3ERR_NAMETOOLONG = 63
+MNT3ERR_NOTSUPP = 10004
+MNT3ERR_SERVERFAULT = 10006
+
+# --- RFC 1813 enum nlm4_stats ---
+NLM4_GRANTED = 0
+NLM4_DENIED = 1
+NLM4_DENIED_NOLOCKS = 2
+NLM4_BLOCKED = 3
+NLM4_DENIED_GRACE_PERIOD = 4
+NLM4_DEADLCK = 5
+NLM4_ROFS = 6
+NLM4_STALE_FH = 7
+NLM4_FBIG = 8
+NLM4_FAILED = 9
+
+# --- RFC 1813 program declaration: NFS_PROGRAM ---
+NFS_PROGRAM = 100003
+NFS_V3 = 3
+NFSPROC3_NULL = 0
+NFSPROC3_GETATTR = 1
+NFSPROC3_SETATTR = 2
+NFSPROC3_LOOKUP = 3
+NFSPROC3_ACCESS = 4
+NFSPROC3_READLINK = 5
+NFSPROC3_READ = 6
+NFSPROC3_WRITE = 7
+NFSPROC3_CREATE = 8
+NFSPROC3_MKDIR = 9
+NFSPROC3_SYMLINK = 10
+NFSPROC3_MKNOD = 11
+NFSPROC3_REMOVE = 12
+NFSPROC3_RMDIR = 13
+NFSPROC3_RENAME = 14
+NFSPROC3_LINK = 15
+NFSPROC3_READDIR = 16
+NFSPROC3_READDIRPLUS = 17
+NFSPROC3_FSSTAT = 18
+NFSPROC3_FSINFO = 19
+NFSPROC3_PATHCONF = 20
+NFSPROC3_COMMIT = 21
+
+# --- RFC 1813 program declaration: MOUNT_PROGRAM ---
+MOUNT_PROGRAM = 100005
+MOUNT_V3 = 3
+MOUNTPROC3_NULL = 0
+MOUNTPROC3_MNT = 1
+MOUNTPROC3_DUMP = 2
+MOUNTPROC3_UMNT = 3
+MOUNTPROC3_UMNTALL = 4
+MOUNTPROC3_EXPORT = 5
+
 # --- RFC 5531 enum auth_flavor ---
 AUTH_NONE = 0
 AUTH_SYS = 1
@@ -2020,6 +2156,8 @@ class NfsServer(object):
         self.excl_verfs = {}
         self.ops = self._build_ops()
         self.ops41 = self._build_ops41()
+        self.ops3 = self._build_ops3()
+        self.mountops3 = self._build_mountops3()
         # ops a 4.1 client may send outside a session, as the only op of the
         # compound (RFC 5661 sec 2.10.2 / 18.34-18.37, 18.50)
         self.no_session_ops = frozenset([
@@ -2318,11 +2456,40 @@ class NfsServer(object):
             pk.raw(body)
             return pk.get()
 
-        if prog != NFS4_PROGRAM:
+        if prog == MOUNT_PROGRAM:
+            # MOUNT v3 (RFC 1813 sec 5) served on the same TCP port, so no
+            # rpcbind is needed: mount with port=/mountport= pointing here
+            if vers != MOUNT_V3:
+                pk = Packer()
+                pk.uint32(MOUNT_V3)
+                pk.uint32(MOUNT_V3)
+                return accepted(PROG_MISMATCH, pk.get())
+            fn = self.mountops3.get(proc)
+            if fn is None:
+                return accepted(PROC_UNAVAIL)
+            try:
+                return accepted(SUCCESS, fn(Ctx(uid, gid, gids), up))
+            except XdrError as e:
+                log.warning("mount3 garbage args: %s", e)
+                return accepted(GARBAGE_ARGS)
+
+        if prog != NFS4_PROGRAM:          # == NFS_PROGRAM (100003)
             return accepted(PROG_UNAVAIL)
+        if vers == NFS_V3:
+            if proc == NFSPROC3_NULL:
+                return accepted(SUCCESS)
+            fn = self.ops3.get(proc)
+            if fn is None:
+                return accepted(PROC_UNAVAIL)
+            try:
+                body = self.v3_call(fn, proc, Ctx(uid, gid, gids), up)
+            except XdrError as e:
+                log.warning("nfs3 garbage args: %s", e)
+                return accepted(GARBAGE_ARGS)
+            return accepted(SUCCESS, body)
         if vers != NFS_V4:
             pk = Packer()
-            pk.uint32(NFS_V4)
+            pk.uint32(NFS_V3)
             pk.uint32(NFS_V4)
             return accepted(PROG_MISMATCH, pk.get())
         if proc == NFSPROC4_NULL:
@@ -3881,6 +4048,758 @@ class NfsServer(object):
         pk.uint32(n)
         pk.uint32(stable if stable != UNSTABLE4 else UNSTABLE4)
         pk.opaque_fixed(self.write_verf)
+        return pk.get()
+
+    # =======================================================================
+    # NFSv3 (RFC 1813) + MOUNT v3 -- stateless, shares the VFS layer.
+    # Wire layouts follow the RFC 1813 XDR (spec/rfc1813.txt).
+    # =======================================================================
+
+    def _build_ops3(self):
+        return {
+            NFSPROC3_GETATTR: self.v3_getattr,
+            NFSPROC3_SETATTR: self.v3_setattr,
+            NFSPROC3_LOOKUP: self.v3_lookup,
+            NFSPROC3_ACCESS: self.v3_access,
+            NFSPROC3_READLINK: self.v3_readlink,
+            NFSPROC3_READ: self.v3_read,
+            NFSPROC3_WRITE: self.v3_write,
+            NFSPROC3_CREATE: self.v3_create,
+            NFSPROC3_MKDIR: self.v3_mkdir,
+            NFSPROC3_SYMLINK: self.v3_symlink,
+            NFSPROC3_MKNOD: self.v3_mknod,
+            NFSPROC3_REMOVE: self.v3_remove,
+            NFSPROC3_RMDIR: self.v3_rmdir,
+            NFSPROC3_RENAME: self.v3_rename,
+            NFSPROC3_LINK: self.v3_link,
+            NFSPROC3_READDIR: self.v3_readdir,
+            NFSPROC3_READDIRPLUS: self.v3_readdirplus,
+            NFSPROC3_FSSTAT: self.v3_fsstat,
+            NFSPROC3_FSINFO: self.v3_fsinfo,
+            NFSPROC3_PATHCONF: self.v3_pathconf,
+            NFSPROC3_COMMIT: self.v3_commit,
+        }
+
+    def _build_mountops3(self):
+        return {
+            MOUNTPROC3_NULL: self.mnt3_null,
+            MOUNTPROC3_MNT: self.mnt3_mnt,
+            MOUNTPROC3_DUMP: self.mnt3_dump,
+            MOUNTPROC3_UMNT: self.mnt3_umnt,
+            MOUNTPROC3_UMNTALL: self.mnt3_null,
+            MOUNTPROC3_EXPORT: self.mnt3_export,
+        }
+
+    # nfsstat3 values (RFC 1813 sec 2.6); shared codes are numerically
+    # identical to their NFSv4 counterparts, so most NfsErr values pass
+    # through unchanged
+    V3_STATS = frozenset([
+        NFS3ERR_PERM, NFS3ERR_NOENT, NFS3ERR_IO, NFS3ERR_NXIO,
+        NFS3ERR_ACCES, NFS3ERR_EXIST, NFS3ERR_XDEV, NFS3ERR_NODEV,
+        NFS3ERR_NOTDIR, NFS3ERR_ISDIR, NFS3ERR_INVAL, NFS3ERR_FBIG,
+        NFS3ERR_NOSPC, NFS3ERR_ROFS, NFS3ERR_MLINK, NFS3ERR_NAMETOOLONG,
+        NFS3ERR_NOTEMPTY, NFS3ERR_DQUOT, NFS3ERR_STALE, NFS3ERR_REMOTE,
+        NFS3ERR_BADHANDLE, NFS3ERR_NOT_SYNC, NFS3ERR_BAD_COOKIE,
+        NFS3ERR_NOTSUPP, NFS3ERR_TOOSMALL, NFS3ERR_SERVERFAULT,
+        NFS3ERR_BADTYPE, NFS3ERR_JUKEBOX,
+    ])
+
+    # count of trailing "attributes_follow = FALSE" booleans in each
+    # procedure's resfail arm (post_op_attr = 1, wcc_data = 2)
+    V3_FAIL_SHAPE = {
+        NFSPROC3_GETATTR: 0, NFSPROC3_SETATTR: 2, NFSPROC3_LOOKUP: 1,
+        NFSPROC3_ACCESS: 1, NFSPROC3_READLINK: 1, NFSPROC3_READ: 1,
+        NFSPROC3_WRITE: 2, NFSPROC3_CREATE: 2, NFSPROC3_MKDIR: 2,
+        NFSPROC3_SYMLINK: 2, NFSPROC3_MKNOD: 2, NFSPROC3_REMOVE: 2,
+        NFSPROC3_RMDIR: 2, NFSPROC3_RENAME: 4, NFSPROC3_LINK: 3,
+        NFSPROC3_READDIR: 1, NFSPROC3_READDIRPLUS: 1, NFSPROC3_FSSTAT: 1,
+        NFSPROC3_FSINFO: 1, NFSPROC3_PATHCONF: 1, NFSPROC3_COMMIT: 2,
+    }
+
+    def v3_call(self, fn, proc, ctx, up):
+        """Run one NFSv3 procedure, mapping errors to a resfail body."""
+        try:
+            return fn(ctx, up)
+        except NfsErr as e:
+            stat = e.stat if e.stat in self.V3_STATS else NFS3ERR_SERVERFAULT
+        except OverflowError:
+            stat = NFS3ERR_INVAL
+        except OSError as e:
+            stat = oserror_to_stat(e)
+            if stat not in self.V3_STATS:
+                stat = NFS3ERR_IO
+        except XdrError:
+            raise
+        except Exception:
+            log.exception("nfs3 proc %d failed", proc)
+            stat = NFS3ERR_SERVERFAULT
+        pk = Packer()
+        pk.uint32(stat)
+        for _ in range(self.V3_FAIL_SHAPE.get(proc, 0)):
+            pk.uint32(0)                 # attributes_follow = FALSE
+        return pk.get()
+
+    def _v3_fh(self, up):
+        return fh_ino(up.opaque(NFS3_FHSIZE))
+
+    @staticmethod
+    def _v3_ftype(st_mode):
+        if statmod.S_ISDIR(st_mode):
+            return NF3DIR
+        if statmod.S_ISLNK(st_mode):
+            return NF3LNK
+        if statmod.S_ISCHR(st_mode):
+            return NF3CHR
+        if statmod.S_ISBLK(st_mode):
+            return NF3BLK
+        if statmod.S_ISFIFO(st_mode):
+            return NF3FIFO
+        if statmod.S_ISSOCK(st_mode):
+            return NF3SOCK
+        return NF3REG
+
+    @staticmethod
+    def _nfstime3(pk, t_ns):
+        pk.uint32((t_ns // 10**9) & 0xFFFFFFFF)
+        pk.uint32(t_ns % 10**9)
+
+    def _pack_fattr3(self, pk, ino, path, st):
+        uid, gid, mode = self.file_ugm(ino, path, st)
+        pk.uint32(self._v3_ftype(st.st_mode))
+        pk.uint32(mode & 0o7777)
+        pk.uint32(st.st_nlink)
+        pk.uint32(uid)
+        pk.uint32(gid)
+        pk.uint64(st.st_size)
+        pk.uint64(getattr(st, "st_blocks", 0) * 512 or st.st_size)
+        rdev = getattr(st, "st_rdev", 0)
+        if rdev and hasattr(os, "major"):
+            pk.uint32(os.major(rdev))
+            pk.uint32(os.minor(rdev))
+        else:
+            pk.uint32(0)
+            pk.uint32(0)
+        pk.uint64(FSID_MAJOR)
+        pk.uint64(ino)
+        self._nfstime3(pk, st.st_atime_ns)
+        self._nfstime3(pk, st.st_mtime_ns)
+        self._nfstime3(pk, self.change_of(st))
+        return pk
+
+    def _post_attr(self, pk, ino, path):
+        """post_op_attr: TRUE + fattr3 when the object still stats."""
+        try:
+            st = os.lstat(path)
+        except OSError:
+            pk.boolean(False)
+            return
+        pk.boolean(True)
+        self._pack_fattr3(pk, ino, path, st)
+
+    @staticmethod
+    def _wcc_snap(path):
+        """Capture pre-op wcc_attr (size, mtime, ctime) of a path."""
+        try:
+            st = os.lstat(path)
+            return (st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+        except OSError:
+            return None
+
+    def _pack_wcc(self, pk, pre, ino, path):
+        """wcc_data: pre_op_attr from a snapshot + live post_op_attr."""
+        if pre is None:
+            pk.boolean(False)
+        else:
+            pk.boolean(True)
+            pk.uint64(pre[0])
+            self._nfstime3(pk, pre[1])
+            self._nfstime3(pk, pre[2])
+        self._post_attr(pk, ino, path)
+
+    def _decode_sattr3(self, up):
+        """Decode sattr3 into the apply_attrs vals dict."""
+        vals = {}
+        if up.boolean():
+            vals["mode"] = up.uint32() & 0o7777
+        if up.boolean():
+            vals["uid"] = up.uint32()
+        if up.boolean():
+            vals["gid"] = up.uint32()
+        if up.boolean():
+            vals["size"] = up.uint64()
+        for key in ("atime_ns", "mtime_ns"):
+            how = up.uint32()
+            if how == SET_TO_CLIENT_TIME:
+                sec = up.uint32()
+                nsec = up.uint32()
+                if nsec >= 10**9:
+                    raise NfsErr(NFS3ERR_INVAL)
+                vals[key] = sec * 10**9 + nsec
+            elif how == SET_TO_SERVER_TIME:
+                vals[key] = "now"
+            elif how != DONT_CHANGE:
+                raise NfsErr(NFS3ERR_INVAL)
+        return vals
+
+    # -- NFSv3 procedures --------------------------------------------------
+    def v3_getattr(self, ctx, up):
+        ino = self._v3_fh(up)
+        path = self.path_of(ino)
+        st = self.lstat(path)
+        pk = Packer()
+        pk.uint32(NFS3_OK)
+        self._pack_fattr3(pk, ino, path, st)
+        return pk.get()
+
+    def v3_setattr(self, ctx, up):
+        ino = self._v3_fh(up)
+        vals = self._decode_sattr3(up)
+        guard = up.boolean()
+        guard_ctime = None
+        if guard:
+            guard_ctime = (up.uint32(), up.uint32())
+        path = self.path_of(ino)
+        pre = self._wcc_snap(path)
+        if guard:
+            st = self.lstat(path)
+            ct = self.change_of(st)
+            if (ct // 10**9, ct % 10**9) != guard_ctime:
+                raise NfsErr(NFS3ERR_NOT_SYNC)
+        try:
+            self.apply_attrs(ino, path, vals)
+        except OSError as e:
+            raise NfsErr(oserror_to_stat(e))
+        pk = Packer()
+        pk.uint32(NFS3_OK)
+        self._pack_wcc(pk, pre, ino, path)
+        return pk.get()
+
+    def v3_lookup(self, ctx, up):
+        dir_ino = self._v3_fh(up)
+        name = up.string(MNTPATHLEN)
+        dpath = self.dir_path_of(dir_ino)
+        path = self.child_path(dir_ino, name)
+        if not os.path.lexists(path):
+            pk = Packer()
+            pk.uint32(NFS3ERR_NOENT)
+            self._post_attr(pk, dir_ino, dpath)
+            return pk.get()
+        ino = self.imap.get_or_alloc(dir_ino, name)
+        pk = Packer()
+        pk.uint32(NFS3_OK)
+        pk.opaque(fh_bytes(ino))
+        self._post_attr(pk, ino, path)
+        self._post_attr(pk, dir_ino, dpath)
+        return pk.get()
+
+    def v3_access(self, ctx, up):
+        ino = self._v3_fh(up)
+        want = up.uint32()
+        path = self.path_of(ino)
+        st = self.lstat(path)
+        uid, gid, mode = self.file_ugm(ino, path, st)
+        can_r = self.check_access(ctx, st, uid, gid, mode, True, False, False)
+        can_w = (not self.read_only
+                 and self.check_access(ctx, st, uid, gid, mode,
+                                       False, True, False))
+        can_x = self.check_access(ctx, st, uid, gid, mode, False, False, True)
+        granted = 0
+        if can_r:
+            granted |= ACCESS3_READ
+        if can_w:
+            granted |= ACCESS3_MODIFY | ACCESS3_EXTEND | ACCESS3_DELETE
+        if can_x:
+            granted |= ACCESS3_EXECUTE | ACCESS3_LOOKUP
+        if not statmod.S_ISDIR(st.st_mode):
+            granted &= ~(ACCESS3_LOOKUP | ACCESS3_DELETE)
+        else:
+            granted &= ~ACCESS3_EXECUTE
+        pk = Packer()
+        pk.uint32(NFS3_OK)
+        pk.boolean(True)
+        self._pack_fattr3(pk, ino, path, st)
+        pk.uint32(granted & want)
+        return pk.get()
+
+    def v3_readlink(self, ctx, up):
+        ino = self._v3_fh(up)
+        path = self.path_of(ino)
+        st = self.lstat(path)
+        if not statmod.S_ISLNK(st.st_mode):
+            raise NfsErr(NFS3ERR_INVAL)
+        target = os.readlink(path)
+        pk = Packer()
+        pk.uint32(NFS3_OK)
+        pk.boolean(True)
+        self._pack_fattr3(pk, ino, path, st)
+        pk.string(target)
+        return pk.get()
+
+    def v3_read(self, ctx, up):
+        ino = self._v3_fh(up)
+        offset = up.uint64()
+        count = up.uint32()
+        path = self.path_of(ino)
+        self._require_regular(path)
+        count = min(count, MAXIO)
+        e = self.cache.get(ino, path, False)
+        size = FileCache.size(e)
+        if offset >= size:
+            data = b""
+        else:
+            data = FileCache.pread(e, count, offset)
+        pk = Packer()
+        pk.uint32(NFS3_OK)
+        self._post_attr(pk, ino, path)
+        pk.uint32(len(data))
+        pk.boolean(offset + len(data) >= size)
+        pk.opaque(data)
+        return pk.get()
+
+    def v3_write(self, ctx, up):
+        ino = self._v3_fh(up)
+        offset = up.uint64()
+        count = up.uint32()
+        stable = up.uint32()
+        data = up.opaque()
+        if self.read_only:
+            raise NfsErr(NFS3ERR_ROFS)
+        path = self.path_of(ino)
+        self._require_regular(path)
+        pre = self._wcc_snap(path)
+        e = self.cache.get(ino, path, True)
+        n = FileCache.pwrite(e, data[:count], offset)
+        if stable != UNSTABLE:
+            FileCache.fsync(e)
+        pk = Packer()
+        pk.uint32(NFS3_OK)
+        self._pack_wcc(pk, pre, ino, path)
+        pk.uint32(n)
+        pk.uint32(stable if stable != UNSTABLE else UNSTABLE)
+        pk.opaque_fixed(self.write_verf)
+        return pk.get()
+
+    def _v3_new_object(self, dir_ino, name, path, ino, pre, dpath):
+        """Shared CREATE/MKDIR/SYMLINK/MKNOD success reply tail."""
+        pk = Packer()
+        pk.uint32(NFS3_OK)
+        pk.boolean(True)                 # post_op_fh3 handle_follows
+        pk.opaque(fh_bytes(ino))
+        self._post_attr(pk, ino, path)
+        self._pack_wcc(pk, pre, dir_ino, dpath)
+        return pk.get()
+
+    def v3_create(self, ctx, up):
+        dir_ino = self._v3_fh(up)
+        name = valid_name(up.string(MNTPATHLEN))
+        mode3 = up.uint32()
+        cverf = None
+        vals = {}
+        if mode3 in (UNCHECKED, GUARDED):
+            vals = self._decode_sattr3(up)
+        elif mode3 == EXCLUSIVE:
+            cverf = up.opaque_fixed(NFS3_CREATEVERFSIZE)
+        else:
+            raise NfsErr(NFS3ERR_INVAL)
+        if self.read_only:
+            raise NfsErr(NFS3ERR_ROFS)
+        dpath = self.dir_path_of(dir_ino)
+        path = self.child_path(dir_ino, name)
+        pre = self._wcc_snap(dpath)
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0)
+        existed = os.path.lexists(path)
+        if mode3 == EXCLUSIVE:
+            ino0 = self.imap.get_child(dir_ino, name)
+            if existed:
+                if (self.excl_verfs.get(ino0) if ino0 else None) != cverf:
+                    raise NfsErr(NFS3ERR_EXIST)
+            else:
+                fd = os.open(path, flags | os.O_EXCL, 0o644)
+                os.close(fd)
+                ino0 = self.imap.get_or_alloc(dir_ino, name)
+                self.excl_verfs[ino0] = cverf
+                self._chown_new(path, ctx, ino0)
+        else:
+            if mode3 == GUARDED:
+                flags |= os.O_EXCL
+            try:
+                fd = os.open(path, flags, vals.get("mode", 0o644))
+                os.close(fd)
+            except FileExistsError:
+                raise NfsErr(NFS3ERR_EXIST)
+            ino0 = self.imap.get_or_alloc(dir_ino, name)
+            if not existed:
+                if vals:
+                    try:
+                        self.apply_attrs(ino0, path, vals)
+                    except OSError:
+                        pass
+                self._chown_new(path, ctx, ino0)
+            elif mode3 == UNCHECKED and vals.get("size") == 0:
+                self.apply_attrs(ino0, path, {"size": 0})
+        ino = self.imap.get_or_alloc(dir_ino, name)
+        return self._v3_new_object(dir_ino, name, path, ino, pre, dpath)
+
+    def v3_mkdir(self, ctx, up):
+        dir_ino = self._v3_fh(up)
+        name = valid_name(up.string(MNTPATHLEN))
+        vals = self._decode_sattr3(up)
+        if self.read_only:
+            raise NfsErr(NFS3ERR_ROFS)
+        dpath = self.dir_path_of(dir_ino)
+        path = self.child_path(dir_ino, name)
+        pre = self._wcc_snap(dpath)
+        try:
+            os.mkdir(path, vals.get("mode", 0o755))
+        except FileExistsError:
+            raise NfsErr(NFS3ERR_EXIST)
+        ino = self.imap.get_or_alloc(dir_ino, name)
+        if vals:
+            try:
+                self.apply_attrs(ino, path, vals)
+            except OSError:
+                pass
+        self._chown_new(path, ctx, ino)
+        return self._v3_new_object(dir_ino, name, path, ino, pre, dpath)
+
+    def v3_symlink(self, ctx, up):
+        dir_ino = self._v3_fh(up)
+        name = valid_name(up.string(MNTPATHLEN))
+        vals = self._decode_sattr3(up)
+        target = up.string(MNTPATHLEN)
+        if self.read_only:
+            raise NfsErr(NFS3ERR_ROFS)
+        if not self.symlink_ok:
+            raise NfsErr(NFS3ERR_NOTSUPP)
+        dpath = self.dir_path_of(dir_ino)
+        path = self.child_path(dir_ino, name)
+        pre = self._wcc_snap(dpath)
+        try:
+            os.symlink(target, path)
+        except FileExistsError:
+            raise NfsErr(NFS3ERR_EXIST)
+        ino = self.imap.get_or_alloc(dir_ino, name)
+        self._chown_new(path, ctx, ino)
+        return self._v3_new_object(dir_ino, name, path, ino, pre, dpath)
+
+    def v3_mknod(self, ctx, up):
+        dir_ino = self._v3_fh(up)
+        name = valid_name(up.string(MNTPATHLEN))
+        ftype = up.uint32()
+        dev_major = dev_minor = 0
+        vals = {}
+        if ftype in (NF3CHR, NF3BLK):
+            vals = self._decode_sattr3(up)
+            dev_major = up.uint32()
+            dev_minor = up.uint32()
+        elif ftype in (NF3SOCK, NF3FIFO):
+            vals = self._decode_sattr3(up)
+        else:
+            raise NfsErr(NFS3ERR_BADTYPE)
+        if self.read_only:
+            raise NfsErr(NFS3ERR_ROFS)
+        dpath = self.dir_path_of(dir_ino)
+        path = self.child_path(dir_ino, name)
+        pre = self._wcc_snap(dpath)
+        try:
+            if ftype == NF3FIFO and hasattr(os, "mkfifo"):
+                os.mkfifo(path, vals.get("mode", 0o644))
+            elif ftype == NF3SOCK and hasattr(os, "mknod"):
+                os.mknod(path, vals.get("mode", 0o644) | statmod.S_IFSOCK)
+            elif ftype in (NF3CHR, NF3BLK) and hasattr(os, "mknod"):
+                kind = statmod.S_IFCHR if ftype == NF3CHR else statmod.S_IFBLK
+                os.mknod(path, vals.get("mode", 0o644) | kind,
+                         os.makedev(dev_major, dev_minor))
+            else:
+                raise NfsErr(NFS3ERR_NOTSUPP)
+        except FileExistsError:
+            raise NfsErr(NFS3ERR_EXIST)
+        except PermissionError:
+            raise NfsErr(NFS3ERR_PERM)
+        ino = self.imap.get_or_alloc(dir_ino, name)
+        self._chown_new(path, ctx, ino)
+        return self._v3_new_object(dir_ino, name, path, ino, pre, dpath)
+
+    def _v3_remove_common(self, up, want_dir):
+        dir_ino = self._v3_fh(up)
+        name = valid_name(up.string(MNTPATHLEN))
+        if self.read_only:
+            raise NfsErr(NFS3ERR_ROFS)
+        dpath = self.dir_path_of(dir_ino)
+        path = self.child_path(dir_ino, name)
+        pre = self._wcc_snap(dpath)
+        st = self.lstat(path)
+        isdir = statmod.S_ISDIR(st.st_mode)
+        if want_dir and not isdir:
+            raise NfsErr(NFS3ERR_NOTDIR)
+        if not want_dir and isdir:
+            raise NfsErr(NFS3ERR_ISDIR)
+        ino = self.imap.get_child(dir_ino, name)
+        if ino:
+            self.cache.invalidate(ino)
+            self.side.forget(ino)
+        if isdir:
+            os.rmdir(path)
+        else:
+            os.unlink(path)
+        self.imap.remove_child(dir_ino, name)
+        pk = Packer()
+        pk.uint32(NFS3_OK)
+        self._pack_wcc(pk, pre, dir_ino, dpath)
+        return pk.get()
+
+    def v3_remove(self, ctx, up):
+        return self._v3_remove_common(up, want_dir=False)
+
+    def v3_rmdir(self, ctx, up):
+        return self._v3_remove_common(up, want_dir=True)
+
+    def v3_rename(self, ctx, up):
+        from_dir = self._v3_fh(up)
+        from_name = valid_name(up.string(MNTPATHLEN))
+        to_dir = self._v3_fh(up)
+        to_name = valid_name(up.string(MNTPATHLEN))
+        if self.read_only:
+            raise NfsErr(NFS3ERR_ROFS)
+        fdpath = self.dir_path_of(from_dir)
+        tdpath = self.dir_path_of(to_dir)
+        src = self.child_path(from_dir, from_name)
+        dst = self.child_path(to_dir, to_name)
+        pre_f = self._wcc_snap(fdpath)
+        pre_t = self._wcc_snap(tdpath)
+        if not os.path.lexists(src):
+            raise NfsErr(NFS3ERR_NOENT)
+        moving = self.imap.get_child(from_dir, from_name)
+        if moving:
+            self.cache.invalidate(moving)
+        replaced0 = self.imap.get_child(to_dir, to_name)
+        if replaced0:
+            self.cache.invalidate(replaced0)
+            self.side.forget(replaced0)
+        try:
+            os.replace(src, dst)
+        except IsADirectoryError:
+            raise NfsErr(NFS3ERR_EXIST)
+        except OSError as e:
+            # renaming a directory over an existing empty directory
+            if os.path.isdir(src) and os.path.isdir(dst):
+                os.rmdir(dst)
+                os.rename(src, dst)
+            else:
+                raise NfsErr(oserror_to_stat(e))
+        self.imap.move(from_dir, from_name, to_dir, to_name)
+        pk = Packer()
+        pk.uint32(NFS3_OK)
+        self._pack_wcc(pk, pre_f, from_dir, fdpath)
+        self._pack_wcc(pk, pre_t, to_dir, tdpath)
+        return pk.get()
+
+    def v3_link(self, ctx, up):
+        ino = self._v3_fh(up)
+        link_dir = self._v3_fh(up)
+        name = valid_name(up.string(MNTPATHLEN))
+        if self.read_only:
+            raise NfsErr(NFS3ERR_ROFS)
+        src = self.path_of(ino)
+        if statmod.S_ISDIR(self.lstat(src).st_mode):
+            raise NfsErr(NFS3ERR_ISDIR)
+        dpath = self.dir_path_of(link_dir)
+        dst = self.child_path(link_dir, name)
+        pre = self._wcc_snap(dpath)
+        try:
+            os.link(src, dst)
+        except FileExistsError:
+            raise NfsErr(NFS3ERR_EXIST)
+        except AttributeError:
+            raise NfsErr(NFS3ERR_NOTSUPP)
+        self.imap.get_or_alloc(link_dir, name)
+        pk = Packer()
+        pk.uint32(NFS3_OK)
+        self._post_attr(pk, ino, src)
+        self._pack_wcc(pk, pre, link_dir, dpath)
+        return pk.get()
+
+    def _v3_dir_entries(self, dir_ino, dpath, cookie):
+        """Sorted entries after the given cookie: (cookie, name, ino)."""
+        try:
+            names = sorted(os.listdir(dpath))
+        except NotADirectoryError:
+            raise NfsErr(NFS3ERR_NOTDIR)
+        out = []
+        for i, name in enumerate(names):
+            this_cookie = i + 3          # cookies 0,1,2 are reserved
+            if this_cookie <= cookie:
+                continue
+            out.append((this_cookie, name))
+        return out
+
+    def v3_readdir(self, ctx, up):
+        dir_ino = self._v3_fh(up)
+        cookie = up.uint64()
+        up.opaque_fixed(NFS3_COOKIEVERFSIZE)   # cookieverf: we use zeros
+        count = up.uint32()
+        dpath = self.dir_path_of(dir_ino)
+        pk = Packer()
+        pk.uint32(NFS3_OK)
+        self._post_attr(pk, dir_ino, dpath)
+        pk.opaque_fixed(b"\0" * NFS3_COOKIEVERFSIZE)
+        used = len(pk.get()) + 16
+        eof = True
+        for this_cookie, name in self._v3_dir_entries(dir_ino, dpath, cookie):
+            ino = self.imap.get_or_alloc(dir_ino, name)
+            eb = Packer()
+            eb.boolean(True)
+            eb.uint64(ino)
+            eb.string(name)
+            eb.uint64(this_cookie)
+            b = eb.get()
+            if used + len(b) + 8 > count:
+                eof = False
+                break
+            pk.raw(b)
+            used += len(b)
+        pk.boolean(False)                # end of entry list
+        pk.boolean(eof)
+        return pk.get()
+
+    def v3_readdirplus(self, ctx, up):
+        dir_ino = self._v3_fh(up)
+        cookie = up.uint64()
+        up.opaque_fixed(NFS3_COOKIEVERFSIZE)
+        dircount = up.uint32()
+        maxcount = up.uint32()
+        dpath = self.dir_path_of(dir_ino)
+        pk = Packer()
+        pk.uint32(NFS3_OK)
+        self._post_attr(pk, dir_ino, dpath)
+        pk.opaque_fixed(b"\0" * NFS3_COOKIEVERFSIZE)
+        used = len(pk.get()) + 16
+        dused = 0
+        eof = True
+        for this_cookie, name in self._v3_dir_entries(dir_ino, dpath, cookie):
+            cpath = os.path.join(dpath, name)
+            ino = self.imap.get_or_alloc(dir_ino, name)
+            eb = Packer()
+            eb.boolean(True)
+            eb.uint64(ino)
+            eb.string(name)
+            eb.uint64(this_cookie)
+            self._post_attr(eb, ino, cpath)
+            eb.boolean(True)             # post_op_fh3 handle_follows
+            eb.opaque(fh_bytes(ino))
+            b = eb.get()
+            nb = 8 + 8 + 4 + len(name)
+            if (used + len(b) + 8 > maxcount
+                    or (dircount and dused + nb > dircount)):
+                eof = False
+                break
+            pk.raw(b)
+            used += len(b)
+            dused += nb
+        pk.boolean(False)
+        pk.boolean(eof)
+        return pk.get()
+
+    def v3_fsstat(self, ctx, up):
+        ino = self._v3_fh(up)
+        path = self.path_of(ino)
+        s = self.fs_stats()
+        pk = Packer()
+        pk.uint32(NFS3_OK)
+        self._post_attr(pk, ino, path)
+        pk.uint64(s["space_total"])
+        pk.uint64(s["space_free"])
+        pk.uint64(s["space_avail"])
+        pk.uint64(s["files_total"])
+        pk.uint64(s["files_free"])
+        pk.uint64(s["files_avail"])
+        pk.uint32(0)                     # invarsec
+        return pk.get()
+
+    def v3_fsinfo(self, ctx, up):
+        ino = self._v3_fh(up)
+        path = self.path_of(ino)
+        pk = Packer()
+        pk.uint32(NFS3_OK)
+        self._post_attr(pk, ino, path)
+        pk.uint32(MAXIO)                 # rtmax
+        pk.uint32(MAXIO)                 # rtpref
+        pk.uint32(4096)                  # rtmult
+        pk.uint32(MAXIO)                 # wtmax
+        pk.uint32(MAXIO)                 # wtpref
+        pk.uint32(4096)                  # wtmult
+        pk.uint32(65536)                 # dtpref
+        pk.uint64(NFS4_INT64_MAX)        # maxfilesize
+        pk.uint32(0)                     # time_delta seconds
+        pk.uint32(1)                     # time_delta nseconds
+        props = FSF3_LINK | FSF3_HOMOGENEOUS | FSF3_CANSETTIME
+        if self.symlink_ok:
+            props |= FSF3_SYMLINK
+        pk.uint32(props)
+        return pk.get()
+
+    def v3_pathconf(self, ctx, up):
+        ino = self._v3_fh(up)
+        path = self.path_of(ino)
+        pk = Packer()
+        pk.uint32(NFS3_OK)
+        self._post_attr(pk, ino, path)
+        pk.uint32(255)                   # linkmax
+        pk.uint32(255)                   # name_max
+        pk.boolean(True)                 # no_trunc
+        pk.boolean(True)                 # chown_restricted
+        pk.boolean(IS_WINDOWS)           # case_insensitive
+        pk.boolean(True)                 # case_preserving
+        return pk.get()
+
+    def v3_commit(self, ctx, up):
+        ino = self._v3_fh(up)
+        up.uint64()                      # offset
+        up.uint32()                      # count
+        path = self.path_of(ino)
+        self._require_regular(path)
+        pre = self._wcc_snap(path)
+        if not self.read_only:
+            e = self.cache.get(ino, path, True)
+            FileCache.fsync(e)
+        pk = Packer()
+        pk.uint32(NFS3_OK)
+        self._pack_wcc(pk, pre, ino, path)
+        pk.opaque_fixed(self.write_verf)
+        return pk.get()
+
+    # -- MOUNT v3 procedures (RFC 1813 sec 5) --------------------------------
+    def mnt3_null(self, ctx, up):
+        return b""
+
+    def mnt3_mnt(self, ctx, up):
+        dirpath = up.string(MNTPATHLEN)
+        pk = Packer()
+        if dirpath not in ("/", ""):
+            pk.uint32(MNT3ERR_NOENT)
+            return pk.get()
+        pk.uint32(MNT3_OK)
+        pk.opaque(fh_bytes(ROOT_INO))    # fhandle3
+        pk.uint32(2)                     # auth_flavors<>
+        pk.uint32(AUTH_SYS)
+        pk.uint32(AUTH_NONE)
+        return pk.get()
+
+    def mnt3_dump(self, ctx, up):
+        pk = Packer()
+        pk.boolean(False)                # empty mountlist
+        return pk.get()
+
+    def mnt3_umnt(self, ctx, up):
+        up.string(MNTPATHLEN)            # dirpath
+        return b""
+
+    def mnt3_export(self, ctx, up):
+        pk = Packer()
+        pk.boolean(True)                 # one exportnode
+        pk.string("/")                   # ex_dir
+        pk.boolean(False)                # no groups
+        pk.boolean(False)                # no next entry
         return pk.get()
 
 
