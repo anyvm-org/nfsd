@@ -769,9 +769,13 @@ MOUNTPROC3_UMNT = 3
 MOUNTPROC3_UMNTALL = 4
 MOUNTPROC3_EXPORT = 5
 
-# --- RFC 1833 sec 3.1 program declaration: PMAP_PROG (portmapper v2) ---
+# --- RFC 1833 portmapper consts ---
 PMAP_PORT = 111
-PMAP_PROGRAM = 100000
+IPPROTO_TCP = 6
+IPPROTO_UDP = 17
+
+# --- RFC 1833 program declaration: PMAP_PROG ---
+PMAP_PROG = 100000
 PMAP_VERS = 2
 PMAPPROC_NULL = 0
 PMAPPROC_SET = 1
@@ -779,9 +783,6 @@ PMAPPROC_UNSET = 2
 PMAPPROC_GETPORT = 3
 PMAPPROC_DUMP = 4
 PMAPPROC_CALLIT = 5
-# supported values for the mapping "prot" field (RFC 1833 sec 3.1)
-PMAP_IPPROTO_TCP = 6
-PMAP_IPPROTO_UDP = 17
 
 # --- RFC 5531 enum auth_flavor ---
 AUTH_NONE = 0
@@ -2480,7 +2481,7 @@ class NfsServer(object):
             pk.raw(body)
             return pk.get()
 
-        if prog == PMAP_PROGRAM:
+        if prog == PMAP_PROG:
             # Portmapper v2 (RFC 1833 sec 3), answered on every listener
             # including the -pmap port-111 sockets. Needed by v3 clients
             # whose mount_nfs has no mountport= option (OpenBSD, NetBSD,
@@ -4150,9 +4151,9 @@ class NfsServer(object):
         """Every (prog, vers, prot, port) tuple this server serves. All
         programs share the one TCP listener port."""
         return (
-            (NFS_PROGRAM, NFS_V3, PMAP_IPPROTO_TCP, self.port),
-            (NFS_PROGRAM, NFS_V4, PMAP_IPPROTO_TCP, self.port),
-            (MOUNT_PROGRAM, MOUNT_V3, PMAP_IPPROTO_TCP, self.port),
+            (NFS_PROGRAM, NFS_V3, IPPROTO_TCP, self.port),
+            (NFS_PROGRAM, NFS_V4, IPPROTO_TCP, self.port),
+            (MOUNT_PROGRAM, MOUNT_V3, IPPROTO_TCP, self.port),
         )
 
     def pmap_null(self, up):

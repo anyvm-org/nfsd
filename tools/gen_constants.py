@@ -14,6 +14,9 @@ Sources (downloaded verbatim into spec/):
     plain-text blocks (const/enum/program declarations parse with the
     same regexes once page furniture is stripped); the sec 2.4 size
     constants use a bare "NAME value" prose form with its own regex.
+  - RFC 1833: ONC RPC binding protocols. Only the portmapper v2 pieces
+    are emitted (PMAP_PROG program, PMAP_PORT, IPPROTO_TCP/UDP); the
+    rpcbind v3/v4 protocol that shares the document is not served.
 
 Every const, enum, and the program/version/procedure declaration is extracted
 mechanically -- nothing is typed from memory -- so the generated values are
@@ -89,6 +92,25 @@ def clean_rfc1813(text):
             continue
         out.append(line)
     return "\n".join(out)
+
+
+def clean_rfc1833(text):
+    """Drop page furniture (form feeds, running headers/footers)."""
+    out = []
+    for line in text.splitlines():
+        if "\f" in line:
+            continue
+        if re.match(r"^\s*Srinivasan\b", line):
+            continue
+        if re.match(r"^\s*RFC 1833\b", line):
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
+# The only RFC 1833 constants nfsd.py needs: the portmapper's well-known
+# port and the two transport protocol numbers used in mappings.
+RFC1833_CONST_WHITELIST = ("PMAP_PORT", "IPPROTO_TCP", "IPPROTO_UDP")
 
 
 def parse_rfc1813_sizes(text):
@@ -285,6 +307,27 @@ def emit():
         add(vers_name, vers_num, "rfc1813")
         for n, v in procs:
             add(n, v, "rfc1813")
+
+    # RFC 1833 (portmapper v2): same indented plain-text XDR as RFC 1813.
+    # Only the PMAP program is served; the rpcbind v3/v4 protocol that
+    # shares this document is skipped (its multi-version program block
+    # would also defeat the single-version parser).
+    xp = strip_comments(clean_rfc1833(load("rfc1833.txt")))
+    lines.append("")
+    lines.append("# --- RFC 1833 portmapper consts ---")
+    for n, v in parse_consts(xp):
+        if n in RFC1833_CONST_WHITELIST:
+            add(n, v, "rfc1833")
+    for prog_name, prog_num, vers_name, vers_num, procs in \
+            parse_rfc1813_programs(xp):
+        if prog_name != "PMAP_PROG":
+            continue
+        lines.append("")
+        lines.append("# --- RFC 1833 program declaration: %s ---" % prog_name)
+        add(prog_name, prog_num, "rfc1833")
+        add(vers_name, vers_num, "rfc1833")
+        for n, v in procs:
+            add(n, v, "rfc1833")
 
     x5 = strip_comments(clean_rfc5531(load("rfc5531.txt")))
     for name, entries in parse_enums(x5):

@@ -756,7 +756,7 @@ def main():
 
     def pmap(proc, body=b""):
         return rpc_call(sock, proc, body,
-                        prog=nfsd.PMAP_PROGRAM, vers=nfsd.PMAP_VERS)
+                        prog=nfsd.PMAP_PROG, vers=nfsd.PMAP_VERS)
 
     def pmap_mapping(prog, vers, prot):
         pk = nfsd.Packer()
@@ -771,11 +771,11 @@ def main():
     check(True, "PMAP NULL ping")
     up = pmap(nfsd.PMAPPROC_GETPORT,
               pmap_mapping(nfsd.MOUNT_PROGRAM, nfsd.MOUNT_V3,
-                           nfsd.PMAP_IPPROTO_TCP))
+                           nfsd.IPPROTO_TCP))
     check(up.uint32() == port, "PMAP GETPORT mountd/tcp -> server port")
     up = pmap(nfsd.PMAPPROC_GETPORT,
               pmap_mapping(nfsd.NFS_PROGRAM, nfsd.NFS_V3,
-                           nfsd.PMAP_IPPROTO_UDP))
+                           nfsd.IPPROTO_UDP))
     check(up.uint32() == 0, "PMAP GETPORT nfs/udp -> 0 (not registered)")
 
     # 32. DUMP lists the nfs v3/v4 and mountd mappings
@@ -783,17 +783,17 @@ def main():
     entries = []
     while up.boolean():
         entries.append(tuple(up.uint32() for _ in range(4)))
-    check((nfsd.NFS_PROGRAM, nfsd.NFS_V3, nfsd.PMAP_IPPROTO_TCP, port)
+    check((nfsd.NFS_PROGRAM, nfsd.NFS_V3, nfsd.IPPROTO_TCP, port)
           in entries
-          and (nfsd.NFS_PROGRAM, nfsd.NFS_V4, nfsd.PMAP_IPPROTO_TCP, port)
+          and (nfsd.NFS_PROGRAM, nfsd.NFS_V4, nfsd.IPPROTO_TCP, port)
           in entries
-          and (nfsd.MOUNT_PROGRAM, nfsd.MOUNT_V3, nfsd.PMAP_IPPROTO_TCP,
+          and (nfsd.MOUNT_PROGRAM, nfsd.MOUNT_V3, nfsd.IPPROTO_TCP,
                port) in entries,
           "PMAP DUMP lists nfs v3+v4 and mountd")
 
     # 33. SET is refused on the static table
     up = pmap(nfsd.PMAPPROC_SET,
-              pmap_mapping(300000, 1, nfsd.PMAP_IPPROTO_TCP))
+              pmap_mapping(300000, 1, nfsd.IPPROTO_TCP))
     check(up.uint32() == 0, "PMAP SET refused")
 
     # 34. GETPORT over UDP -- the transport BSD mount_nfs actually queries on
@@ -835,8 +835,8 @@ def main():
 
     up = udp_call(nfsd.PMAPPROC_GETPORT,
                   pmap_mapping(nfsd.NFS_PROGRAM, nfsd.NFS_V3,
-                               nfsd.PMAP_IPPROTO_TCP),
-                  nfsd.PMAP_PROGRAM, nfsd.PMAP_VERS)
+                               nfsd.IPPROTO_TCP),
+                  nfsd.PMAP_PROG, nfsd.PMAP_VERS)
     check(up.uint32() == port, "PMAP GETPORT over UDP -> server port")
 
     usrv.shutdown()
