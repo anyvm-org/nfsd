@@ -1,7 +1,8 @@
 # nfsd.py
 
 [![test](https://github.com/anyvm-org/nfsd/actions/workflows/test.yml/badge.svg)](https://github.com/anyvm-org/nfsd/actions/workflows/test.yml)
-[![pynfs conformance](https://img.shields.io/badge/pynfs%20NFSv4.0-589%20passed%2C%200%20failed-brightgreen)](test/pynfs-known-failures.txt)
+[![pynfs 4.0](https://img.shields.io/badge/pynfs%20NFSv4.0-589%20passed%2C%200%20failed-brightgreen)](test/pynfs-known-failures.txt)
+[![pynfs 4.1](https://img.shields.io/badge/pynfs%20NFSv4.1-172%2F184%20passed-brightgreen)](test/pynfs41-known-failures.txt)
 [![python](https://img.shields.io/badge/python-3.8%2B%20stdlib%20only-blue)](nfsd.py)
 
 A cross-platform, **user-space NFSv4.0 / NFSv4.1 server in one pure-Python
@@ -66,15 +67,22 @@ unprivileged on a port >= 1024.
   CLOSE, READ, WRITE, COMMIT, CREATE (dir/symlink/fifo), REMOVE, RENAME,
   LINK, SECINFO, LOCK/LOCKT/LOCKU (in-memory byte-range locks),
   RELEASE_LOCKOWNER.
-- NFSv4.1 (RFC 5661) minimal session support: EXCHANGE_ID, CREATE_SESSION,
-  SEQUENCE with a per-slot exactly-once reply cache, BIND_CONN_TO_SESSION,
-  DESTROY_SESSION, DESTROY_CLIENTID, RECLAIM_COMPLETE, SECINFO_NO_NAME,
-  FREE_STATEID, TEST_STATEID, OPEN by CLAIM_FH and EXCLUSIVE4_1 create,
-  and the suppattr_exclcreat attribute. Sessions renew the lease
-  implicitly; 4.1 compounds ignore owner seqids per the spec. Fore
-  channel only: no backchannel, so no delegations are ever granted (the
-  server never sets CONN_BACK_CHAN); pNFS/layout ops, SSV, and
-  RPCSEC_GSS answer NFS4ERR_NOTSUPP.
+- NFSv4.1 (RFC 5661) session support: EXCHANGE_ID with the full
+  client-record state machine of sec 18.35.4 (update/collision/restart
+  cases, unconfirmed-record lease expiry), CREATE_SESSION with
+  exactly-once semantics and channel-attribute validation
+  (TOOSMALL/INVAL), SEQUENCE with a per-slot exactly-once reply cache
+  and enforcement of the negotiated limits (REQ_TOO_BIG, REP_TOO_BIG,
+  REP_TOO_BIG_TO_CACHE, TOO_MANY_OPS), the current stateid
+  (sec 16.2.3.1.2, incl. SAVEFH/RESTOREFH), BIND_CONN_TO_SESSION,
+  DESTROY_SESSION, DESTROY_CLIENTID, RECLAIM_COMPLETE (with GRACE
+  gating of pre-reclaim opens), SECINFO_NO_NAME, FREE_STATEID,
+  TEST_STATEID, OPEN by CLAIM_FH and EXCLUSIVE4_1 create,
+  OPEN_DELEGATE_NONE_EXT want-hint replies, and the suppattr_exclcreat
+  attribute. Sessions renew the lease implicitly; 4.1 compounds ignore
+  owner seqids per the spec. Fore channel only: no backchannel, so no
+  delegations are ever granted (the server never sets CONN_BACK_CHAN);
+  pNFS/layout ops, SSV, and RPCSEC_GSS answer NFS4ERR_NOTSUPP.
 - Attributes: 41 fattr4 attributes incl. mode/owner/group/times/space/statfs.
 - An open-file descriptor cache, so streams of READ/WRITE ops reuse one
   descriptor instead of open/close per RPC (the dominant write cost).
@@ -100,22 +108,25 @@ python3 test/rpcsmoke.py    # protocol-level smoke; no privileges needed,
 ```
 
 `test/rpcsmoke.py` starts the server in-process and speaks raw NFSv4.0
-(RPC NULL, PUTROOTFH/LOOKUP/READ/WRITE/CREATE/SETATTR/REMOVE, minor-version
-rejection, illegal opcodes) -- this is also what CI runs on all three OSes.
-The Windows-hosted server has additionally been verified end to end with a
+and NFSv4.1 (RPC NULL, PUTROOTFH/LOOKUP/READ/WRITE/CREATE/SETATTR/REMOVE,
+the EXCHANGE_ID/CREATE_SESSION/SEQUENCE session flow with slot replay,
+GRACE gating, the current stateid, minor-version rejection, illegal
+opcodes) -- this is also what CI runs on all three OSes. The
+Windows-hosted server has additionally been verified end to end with a
 real Linux kernel client (WSL2) including chmod/chown persistence into the
 NTFS ADS sidecar.
 
 ## Protocol conformance (pynfs)
 
-The [pynfs](https://github.com/kofemann/pynfs) NFSv4.0 servertests suite is
-the acceptance harness:
+The [pynfs](https://github.com/kofemann/pynfs) servertests suites are the
+acceptance harness, for both minor versions:
 
 ```sh
-bash test/conformance.sh      # clones/builds pynfs, runs 600+ tests
+bash test/conformance.sh              # NFSv4.0 suite, 600+ tests
+MINOR=1 bash test/conformance.sh      # NFSv4.1 suite
 ```
 
-Current standing: **589 passed / 0 failed / 2 warned / 10 skipped of the
+NFSv4.0 standing: **589 passed / 0 failed / 2 warned / 10 skipped of the
 601 selected tests**, zero server crashes or hangs. This includes the
 strict NFSv4.0 state machine: open/lock-owner seqid enforcement with the
 at-most-once replay cache (BAD_SEQID), stateid generations
@@ -124,9 +135,15 @@ cache, and courteous-server lease expiry (an expired client's state is
 reaped when it conflicts). The 2 warnings are POSIX-advisory; the 10
 skips are tests the suite itself deems inapplicable.
 
-CI treats that file as a baseline: any conformance failure not listed there
-fails the build; a listed test that starts passing is reported so the
-baseline can be tightened.
+NFSv4.1 standing: **172 passed / 12 failed of the 184 selected tests**,
+zero server crashes or hangs. Eleven of the remaining failures need real
+delegations (impossible without a backchannel, see
+`test/pynfs41-known-failures.txt`); the twelfth is a pynfs client-side
+XDR limitation.
+
+CI treats the per-minor-version known-failures files as baselines: any
+conformance failure not listed there fails the build; a listed test that
+starts passing is reported so the baseline can be tightened.
 
 ## Regenerating protocol constants
 
