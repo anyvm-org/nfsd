@@ -153,9 +153,11 @@ NFSv4.0 and NFSv4.1 (RPC NULL, PUTROOTFH/LOOKUP/READ/WRITE/CREATE/
 SETATTR/REMOVE, the EXCHANGE_ID/CREATE_SESSION/SEQUENCE session flow with
 slot replay, GRACE gating, the current stateid, minor-version rejection,
 illegal opcodes, a full MOUNT3+NFS3 pass: MNT/EXPORT, v3 create/
-write/read/setattr/readdirplus/rename/remove/fsinfo, and portmapper v2
-GETPORT/DUMP/SET over both TCP and UDP) -- this is also what
-CI runs on all three OSes. The Windows-hosted server has additionally
+write/read/setattr/readdirplus/rename/remove/fsinfo, portmapper v2
+GETPORT/DUMP/SET over both TCP and UDP, and the wildcard fallback for a
+denied specific-address bind -- simulated everywhere, and additionally
+exercised against the real macOS privileged-port rule on port 111 when
+running on macOS) -- this is also what CI runs on all three OSes. The Windows-hosted server has additionally
 been verified end to end with a real Linux kernel client (WSL2) including
 chmod/chown persistence into the NTFS ADS sidecar.
 

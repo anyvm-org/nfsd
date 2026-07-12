@@ -802,7 +802,7 @@ def main():
     uport = usrv.server_address[1]
     nfsd._serve_in_thread(usrv)
 
-    def udp_call(proc, body, prog, vers):
+    def udp_call(proc, body, prog, vers, dport=None):
         _xid[0] += 1
         xid = _xid[0]
         pk = nfsd.Packer()
@@ -820,7 +820,7 @@ def main():
         us = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         us.settimeout(10)
         try:
-            us.sendto(pk.get(), ("127.0.0.1", uport))
+            us.sendto(pk.get(), ("127.0.0.1", uport if dport is None else dport))
             data, _ = us.recvfrom(65536)
         finally:
             us.close()
@@ -841,6 +841,93 @@ def main():
 
     usrv.shutdown()
     usrv.server_close()
+
+    # 35. wildcard fallback when a specific bind address is denied
+    # (simulates the macOS 10.14+ rule: unprivileged binds below port 1024
+    # succeed only on the wildcard address, a specific address gets
+    # PermissionError). The wrapper classes deny every non-wildcard bind,
+    # so start_pmap_servers must fall back to 0.0.0.0 and stay reachable.
+    import io
+
+    class DenySpecificTcp(nfsd.Server):
+        def server_bind(self):
+            if self.server_address[0] not in ("", "0.0.0.0", "::"):
+                raise PermissionError(13, "Permission denied (simulated)")
+            nfsd.Server.server_bind(self)
+
+    class DenySpecificUdp(nfsd.UdpServer):
+        def server_bind(self):
+            if self.server_address[0] not in ("", "0.0.0.0", "::"):
+                raise PermissionError(13, "Permission denied (simulated)")
+            nfsd.UdpServer.server_bind(self)
+
+    fb_port = 20112
+    fb_out = io.StringIO()
+    fb_srvs = nfsd.start_pmap_servers(srv_nfs, "127.0.0.1", fb_port,
+                                      out=fb_out,
+                                      tcp_cls=DenySpecificTcp,
+                                      udp_cls=DenySpecificUdp)
+    check(len(fb_srvs) == 2, "pmap fallback: tcp+udp listeners up")
+    check(all(ps.server_address[0] == "0.0.0.0" for ps, _ in fb_srvs),
+          "pmap fallback: bound on the wildcard address")
+    check(fb_out.getvalue().count("needs root on this platform") == 2,
+          "pmap fallback: reported for both listeners")
+    for ps, _ in fb_srvs:
+        nfsd._serve_in_thread(ps)
+    up = udp_call(nfsd.PMAPPROC_GETPORT,
+                  pmap_mapping(nfsd.NFS_PROGRAM, nfsd.NFS_V3,
+                               nfsd.IPPROTO_TCP),
+                  nfsd.PMAP_PROG, nfsd.PMAP_VERS, dport=fb_port)
+    check(up.uint32() == port,
+          "pmap fallback: GETPORT answers via loopback on the wildcard bind")
+    for ps, _ in fb_srvs:
+        ps.shutdown()
+        ps.server_close()
+
+    # 36. the REAL macOS rule on the real port 111 (darwin only, non-root):
+    # a specific-address bind of a privileged port is denied while the
+    # wildcard bind succeeds -- exactly what start_pmap_servers relies on.
+    if sys.platform == "darwin" and os.getuid() != 0:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            probe.bind(("0.0.0.0", nfsd.PMAP_PORT))
+            port111_free = True
+        except OSError:
+            port111_free = False
+        finally:
+            probe.close()
+        if port111_free:
+            spec = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                spec.bind(("127.0.0.1", nfsd.PMAP_PORT))
+                bound_specific = True
+            except PermissionError:
+                bound_specific = False
+            finally:
+                spec.close()
+            check(not bound_specific,
+                  "macos: specific-address bind of port 111 denied")
+            mac_out = io.StringIO()
+            mac_srvs = nfsd.start_pmap_servers(srv_nfs, "127.0.0.1",
+                                               nfsd.PMAP_PORT, out=mac_out)
+            check(len(mac_srvs) == 2
+                  and all(ps.server_address[0] == "0.0.0.0"
+                          for ps, _ in mac_srvs),
+                  "macos: pmap fell back to the wildcard on port 111")
+            for ps, _ in mac_srvs:
+                nfsd._serve_in_thread(ps)
+            up = udp_call(nfsd.PMAPPROC_GETPORT,
+                          pmap_mapping(nfsd.MOUNT_PROGRAM, nfsd.MOUNT_V3,
+                                       nfsd.IPPROTO_TCP),
+                          nfsd.PMAP_PROG, nfsd.PMAP_VERS,
+                          dport=nfsd.PMAP_PORT)
+            check(up.uint32() == port,
+                  "macos: GETPORT answers on the real port 111")
+            for ps, _ in mac_srvs:
+                ps.shutdown()
+                ps.server_close()
+        else:
+            print("SKIP: port 111 already in use; macos pmap test skipped")
 
     sock.close()
     srv.shutdown()
