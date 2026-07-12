@@ -1,0 +1,50 @@
+name: test
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rpc-smoke:
+    name: protocol smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest, macos-latest ]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compile check
+        shell: bash
+        run: |
+          PY=$(command -v python3 || command -v python)
+          "$PY" --version
+          "$PY" -m py_compile nfsd.py
+
+      - name: Protocol-level smoke (raw NFSv4.0 over loopback TCP)
+        shell: bash
+        run: |
+          PY=$(command -v python3 || command -v python)
+          "$PY" test/rpcsmoke.py
+
+  e2e-linux:
+    name: e2e (kernel NFS client mount)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install NFS client
+        run: sudo apt-get update && sudo apt-get install -y nfs-common
+
+      - name: Run e2e suite
+        run: bash test/e2e.sh nfsd.py 12049
+
+      - name: Server log
+        if: always()
+        run: cat /tmp/nfsdpy-12049.log || true
