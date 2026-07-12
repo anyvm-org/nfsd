@@ -19,11 +19,17 @@ OUT=/tmp/pynfs-conformance.txt
 LOG=/tmp/nfsdpy-conformance.log
 
 # --- get and build pynfs ---
+# The suite ships only .x files; setup.py runs xdrgen to emit the generated
+# *_const/_type/_pack modules (rpc.rpc_const, xdrdef.nfs4_const, ...). Build
+# whenever those generated modules are absent -- idempotent and quick.
 if [ ! -d "$PYNFS_DIR" ]; then
   git clone --depth 1 https://github.com/kofemann/pynfs "$PYNFS_DIR" || exit 1
 fi
-if [ ! -d "$PYNFS_DIR/nfs4.0/xdrdef" ] && [ ! -f "$PYNFS_DIR/nfs4.0/nfs4_const.py" ]; then
-  (cd "$PYNFS_DIR" && python3 setup.py build > /dev/null 2>&1)
+if ! python3 -c "import sys; sys.path.insert(0, '$PYNFS_DIR/nfs4.0'); \
+sys.path.insert(0, '$PYNFS_DIR/nfs4.0/lib'); import rpc.rpc_const" 2>/dev/null; then
+  echo "building pynfs (xdrgen) ..."
+  (cd "$PYNFS_DIR" && python3 setup.py build) || {
+    echo "FATAL: pynfs build failed"; exit 1; }
 fi
 
 # --- start server ---
