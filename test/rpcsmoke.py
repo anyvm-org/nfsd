@@ -463,8 +463,18 @@ def main():
     nslots = fore[5]
     check(1 <= nslots <= 64, "fore channel slot count sane")
 
-    # 14. SEQUENCE + PUTROOTFH + GETFH
+    # 14. an OPEN before RECLAIM_COMPLETE must be rejected with GRACE
+    #     (RFC 5661 sec 18.51.3), then RECLAIM_COMPLETE clears the way
     st, n, up = compound(sock, [op_sequence(sessionid, 1, 0),
+                                op_putrootfh(),
+                                op_open41_create("early.txt")], minor=1)
+    check(st == nfsd.NFS4ERR_GRACE, "OPEN before RECLAIM_COMPLETE -> GRACE")
+    st, n, up = compound(sock, [op_sequence(sessionid, 2, 0),
+                                op_reclaim_complete()], minor=1)
+    check(st == nfsd.NFS4_OK, "RECLAIM_COMPLETE OK")
+
+    # 15. SEQUENCE + PUTROOTFH + GETFH
+    st, n, up = compound(sock, [op_sequence(sessionid, 3, 0),
                                 op_putrootfh(), op_getfh()], minor=1)
     check(st == nfsd.NFS4_OK, "SEQUENCE compound status OK")
     reply1 = bytes(up.data[up.pos:])
@@ -472,23 +482,23 @@ def main():
     up.uint32()                        # status
     check(up.opaque_fixed(nfsd.NFS4_SESSIONID_SIZE) == sessionid,
           "SEQUENCE echoes sessionid")
-    check(up.uint32() == 1, "SEQUENCE echoes seqid")
+    check(up.uint32() == 3, "SEQUENCE echoes seqid")
     check(up.uint32() == 0, "SEQUENCE echoes slotid")
 
-    # 15. retransmission on the same slot/seqid replays the cached reply
-    st, n, up = compound(sock, [op_sequence(sessionid, 1, 0),
+    # 16. retransmission on the same slot/seqid replays the cached reply
+    st, n, up = compound(sock, [op_sequence(sessionid, 3, 0),
                                 op_putrootfh(), op_getfh()], minor=1)
     reply2 = bytes(up.data[up.pos:])
     check(reply1 == reply2, "same-slot retransmit replays cached reply")
 
-    # 16. mid-compound SEQUENCE -> SEQUENCE_POS
-    st, n, up = compound(sock, [op_sequence(sessionid, 2, 0),
-                                op_sequence(sessionid, 3, 1)], minor=1)
+    # 17. mid-compound SEQUENCE -> SEQUENCE_POS
+    st, n, up = compound(sock, [op_sequence(sessionid, 4, 0),
+                                op_sequence(sessionid, 5, 1)], minor=1)
     check(st == nfsd.NFS4ERR_SEQUENCE_POS,
           "second SEQUENCE in compound -> SEQUENCE_POS")
 
-    # 17. OPEN(create) via 4.1: no CONFIRM rflag, WRITE with its stateid
-    st, n, up = compound(sock, [op_sequence(sessionid, 3, 0),
+    # 18. OPEN(create) via 4.1: no CONFIRM rflag, WRITE with its stateid
+    st, n, up = compound(sock, [op_sequence(sessionid, 5, 0),
                                 op_putrootfh(),
                                 op_open41_create("file41.txt")], minor=1)
     check(st == nfsd.NFS4_OK, "4.1 OPEN create status OK")
@@ -505,7 +515,7 @@ def main():
         up.uint32()                    # attrset bitmap words
     check(up.uint32() == nfsd.OPEN_DELEGATE_NONE, "4.1 OPEN no delegation")
 
-    st, n, up = compound(sock, [op_sequence(sessionid, 4, 0),
+    st, n, up = compound(sock, [op_sequence(sessionid, 6, 0),
                                 op_putrootfh(), op_lookup("file41.txt"),
                                 op_write41(open_sid, 0, b"v41 data")],
                          minor=1)
@@ -513,36 +523,37 @@ def main():
     with open(os.path.join(export, "file41.txt"), "rb") as f:
         check(f.read() == b"v41 data", "4.1 write visible on disk")
 
-    st, n, up = compound(sock, [op_sequence(sessionid, 5, 0),
-                                op_putrootfh(), op_lookup("file41.txt"),
-                                op_close41(open_sid)], minor=1)
-    check(st == nfsd.NFS4_OK, "4.1 CLOSE status OK")
-
-    # 18. RECLAIM_COMPLETE, then a repeat -> COMPLETE_ALREADY
-    st, n, up = compound(sock, [op_sequence(sessionid, 6, 0),
-                                op_reclaim_complete()], minor=1)
-    check(st == nfsd.NFS4_OK, "RECLAIM_COMPLETE OK")
+    # close via the CURRENT stateid special value (RFC 5661 sec 16.2.3.1.2):
+    # re-OPEN sets the current stateid, CLOSE(1, 0) consumes it
     st, n, up = compound(sock, [op_sequence(sessionid, 7, 0),
+                                op_putrootfh(),
+                                op_open41_create("file41.txt"),
+                                op_close41(b"\x00\x00\x00\x01" + b"\x00" * 12)],
+                         minor=1)
+    check(st == nfsd.NFS4_OK, "4.1 CLOSE via current stateid OK")
+
+    # 19. a second RECLAIM_COMPLETE -> COMPLETE_ALREADY
+    st, n, up = compound(sock, [op_sequence(sessionid, 8, 0),
                                 op_reclaim_complete()], minor=1)
     check(st == nfsd.NFS4ERR_COMPLETE_ALREADY,
           "second RECLAIM_COMPLETE -> COMPLETE_ALREADY")
 
-    # 19. SECINFO_NO_NAME consumes the current filehandle
-    st, n, up = compound(sock, [op_sequence(sessionid, 8, 0),
+    # 20. SECINFO_NO_NAME consumes the current filehandle
+    st, n, up = compound(sock, [op_sequence(sessionid, 9, 0),
                                 op_putrootfh(), op_secinfo_no_name(),
                                 op_getfh()], minor=1)
     check(st == nfsd.NFS4ERR_NOFILEHANDLE and n == 4,
           "SECINFO_NO_NAME consumes the filehandle")
 
-    # 20. DESTROY_SESSION, then SEQUENCE on it -> BADSESSION
+    # 21. DESTROY_SESSION, then SEQUENCE on it -> BADSESSION
     st, n, up = compound(sock, [op_destroy_session(sessionid)], minor=1)
     check(st == nfsd.NFS4_OK, "DESTROY_SESSION OK")
-    st, n, up = compound(sock, [op_sequence(sessionid, 9, 0),
+    st, n, up = compound(sock, [op_sequence(sessionid, 10, 0),
                                 op_putrootfh()], minor=1)
     check(st == nfsd.NFS4ERR_BADSESSION,
           "SEQUENCE on destroyed session -> BADSESSION")
 
-    # 21. DESTROY_CLIENTID once sessionless
+    # 22. DESTROY_CLIENTID once sessionless
     st, n, up = compound(sock, [op_destroy_clientid(clientid)], minor=1)
     check(st == nfsd.NFS4_OK, "DESTROY_CLIENTID OK")
 
