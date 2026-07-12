@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""nfsd.py - a cross-platform, user-space NFSv4.0 server in one pure-Python file.
+"""nfsd.py - a cross-platform, user-space NFS server in one pure-Python file.
 
-Exports a single local directory over NFSv4.0 on a configurable TCP port.
-Standard library only (sockets + basic filesystem operations); no kernel
-module, no FUSE, no third-party dependencies. Runs on Linux, Windows, macOS.
+Exports a single local directory over NFSv3, NFSv4.0 and NFSv4.1 on a
+configurable TCP port. Standard library only (sockets + basic filesystem
+operations); no kernel module, no FUSE, no third-party dependencies. Runs
+on Linux, Windows, macOS.
 
 Usage:
     python3 nfsd.py -dir /path/to/export -port 2049
@@ -11,9 +12,17 @@ Usage:
 Mount (Linux):
     mount -t nfs -o vers=4.0,port=2049,proto=tcp,sec=sys HOST:/ /mnt/x
 
+With -pmap it also answers portmapper v2 queries on port 111 (tcp+udp), so
+NFSv3 clients without a mountport= mount option (OpenBSD, NetBSD,
+DragonFly) can discover the MOUNT/NFS ports and mount with no port options
+at all.
+
 Protocol references:
     RFC 7530 - NFSv4.0 protocol
     RFC 7531 - NFSv4.0 XDR description (constants machine-extracted below)
+    RFC 5661/5662 - NFSv4.1 protocol + XDR
+    RFC 1813 - NFSv3 + MOUNT v3
+    RFC 1833 - portmapper v2
     RFC 5531 - ONC RPC v2
 
 State model: inode numbers and all NFS state (clients, opens, locks) are
@@ -759,6 +768,20 @@ MOUNTPROC3_DUMP = 2
 MOUNTPROC3_UMNT = 3
 MOUNTPROC3_UMNTALL = 4
 MOUNTPROC3_EXPORT = 5
+
+# --- RFC 1833 sec 3.1 program declaration: PMAP_PROG (portmapper v2) ---
+PMAP_PORT = 111
+PMAP_PROGRAM = 100000
+PMAP_VERS = 2
+PMAPPROC_NULL = 0
+PMAPPROC_SET = 1
+PMAPPROC_UNSET = 2
+PMAPPROC_GETPORT = 3
+PMAPPROC_DUMP = 4
+PMAPPROC_CALLIT = 5
+# supported values for the mapping "prot" field (RFC 1833 sec 3.1)
+PMAP_IPPROTO_TCP = 6
+PMAP_IPPROTO_UDP = 17
 
 # --- RFC 5531 enum auth_flavor ---
 AUTH_NONE = 0
@@ -2158,6 +2181,7 @@ class NfsServer(object):
         self.ops41 = self._build_ops41()
         self.ops3 = self._build_ops3()
         self.mountops3 = self._build_mountops3()
+        self.pmapops = self._build_pmapops()
         # ops a 4.1 client may send outside a session, as the only op of the
         # compound (RFC 5661 sec 2.10.2 / 18.34-18.37, 18.50)
         self.no_session_ops = frozenset([
@@ -2455,6 +2479,26 @@ class NfsServer(object):
             pk.uint32(stat_code)
             pk.raw(body)
             return pk.get()
+
+        if prog == PMAP_PROGRAM:
+            # Portmapper v2 (RFC 1833 sec 3), answered on every listener
+            # including the -pmap port-111 sockets. Needed by v3 clients
+            # whose mount_nfs has no mountport= option (OpenBSD, NetBSD,
+            # DragonFly): their only way to find the MOUNT and NFS ports
+            # is a GETPORT query against port 111.
+            if vers != PMAP_VERS:
+                pk = Packer()
+                pk.uint32(PMAP_VERS)
+                pk.uint32(PMAP_VERS)
+                return accepted(PROG_MISMATCH, pk.get())
+            fn = self.pmapops.get(proc)
+            if fn is None:
+                return accepted(PROC_UNAVAIL)
+            try:
+                return accepted(SUCCESS, fn(up))
+            except XdrError as e:
+                log.warning("pmap garbage args: %s", e)
+                return accepted(GARBAGE_ARGS)
 
         if prog == MOUNT_PROGRAM:
             # MOUNT v3 (RFC 1813 sec 5) served on the same TCP port, so no
@@ -4090,6 +4134,64 @@ class NfsServer(object):
             MOUNTPROC3_EXPORT: self.mnt3_export,
         }
 
+    # -- portmapper v2 (RFC 1833 sec 3): a static table pointing every
+    # program we serve at our own port. PMAPPROC_CALLIT is intentionally
+    # absent (broadcast indirect call; unavailable is the safe answer).
+    def _build_pmapops(self):
+        return {
+            PMAPPROC_NULL: self.pmap_null,
+            PMAPPROC_SET: self.pmap_set,
+            PMAPPROC_UNSET: self.pmap_set,
+            PMAPPROC_GETPORT: self.pmap_getport,
+            PMAPPROC_DUMP: self.pmap_dump,
+        }
+
+    def _pmap_mappings(self):
+        """Every (prog, vers, prot, port) tuple this server serves. All
+        programs share the one TCP listener port."""
+        return (
+            (NFS_PROGRAM, NFS_V3, PMAP_IPPROTO_TCP, self.port),
+            (NFS_PROGRAM, NFS_V4, PMAP_IPPROTO_TCP, self.port),
+            (MOUNT_PROGRAM, MOUNT_V3, PMAP_IPPROTO_TCP, self.port),
+        )
+
+    def pmap_null(self, up):
+        return b""
+
+    def pmap_set(self, up):
+        # Static table: SET/UNSET always refused ("FALSE" reply, RFC 1833
+        # sec 3.2 -- the mapping cannot be established/removed).
+        pk = Packer()
+        pk.uint32(0)
+        return pk.get()
+
+    def pmap_getport(self, up):
+        prog = up.uint32()
+        vers = up.uint32()
+        prot = up.uint32()
+        up.uint32()          # port: ignored per RFC 1833 sec 3.2
+        port = 0             # "A port value of zeros means the program
+                             #  has not been registered."
+        for m_prog, m_vers, m_prot, m_port in self._pmap_mappings():
+            if prog == m_prog and prot == m_prot:
+                port = m_port
+                if vers == m_vers:
+                    break
+        pk = Packer()
+        pk.uint32(port)
+        return pk.get()
+
+    def pmap_dump(self, up):
+        pk = Packer()
+        for m_prog, m_vers, m_prot, m_port in self._pmap_mappings():
+            pk.uint32(1)     # pmaplist: a mapping follows
+            pk.uint32(m_prog)
+            pk.uint32(m_vers)
+            pk.uint32(m_prot)
+            pk.uint32(m_port)
+        pk.uint32(0)         # end of list
+        return pk.get()
+
     # nfsstat3 values (RFC 1813 sec 2.6); shared codes are numerically
     # identical to their NFSv4 counterparts, so most NfsErr values pass
     # through unchanged
@@ -5141,6 +5243,37 @@ class Server(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
+class UdpHandler(socketserver.BaseRequestHandler):
+    """One RPC call per datagram: record marking is for stream transports
+    only (RFC 5531 sec 11), so the datagram body IS the RPC message.
+    Exists for the portmapper: BSD mount_nfs sends its GETPORT queries
+    over UDP."""
+
+    def handle(self):
+        data, sock = self.request
+        try:
+            reply = self.server.nfs.handle_rpc(data)
+        except Exception as e:
+            log.info("udp %s dropped: %s", self.client_address, e)
+            return
+        if reply is not None:
+            try:
+                sock.sendto(reply, self.client_address)
+            except OSError as e:
+                log.info("udp reply to %s failed: %s", self.client_address, e)
+
+
+class UdpServer(socketserver.ThreadingUDPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+
+def _serve_in_thread(srv):
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    return t
+
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
@@ -5148,7 +5281,8 @@ class Server(socketserver.ThreadingTCPServer):
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="nfsd.py",
-        description="cross-platform user-space NFSv4.0 server (pure Python)")
+        description="cross-platform user-space NFS server"
+                    " (v3, v4.0, v4.1; pure Python)")
     ap.add_argument("-dir", required=True, metavar="PATH",
                     help="local directory to export")
     ap.add_argument("-port", type=int, default=2049,
@@ -5160,6 +5294,12 @@ def main(argv=None):
                     help="lease time in seconds (default 90)")
     ap.add_argument("-anonuid", type=int, default=65534)
     ap.add_argument("-anongid", type=int, default=65534)
+    ap.add_argument("-pmap", action="store_true",
+                    help="also serve portmapper v2 (RFC 1833) on port 111"
+                         " tcp+udp, for NFSv3 clients without a mountport="
+                         " mount option (OpenBSD, NetBSD, DragonFly)")
+    ap.add_argument("-pmap-port", type=int, default=PMAP_PORT, metavar="PORT",
+                    help="portmapper port (default %d)" % PMAP_PORT)
     ap.add_argument("-v", action="count", default=0,
                     help="verbosity (-v info, -vv debug)")
     args = ap.parse_args(argv)
@@ -5189,16 +5329,49 @@ def main(argv=None):
     srv.server_activate()
     srv.nfs = nfs
 
+    pmap_srvs = []
+    if args.pmap:
+        # tcp AND udp: BSD mount_nfs sends GETPORT over UDP even for -T
+        # (TCP) mounts, while some clients query over TCP.
+        for cls, handler, proto in ((Server, ConnHandler, "tcp"),
+                                    (UdpServer, UdpHandler, "udp")):
+            try:
+                ps = cls((args.bind, args.pmap_port), handler,
+                         bind_and_activate=False)
+                if ":" in args.bind:
+                    ps.address_family = socket.AF_INET6
+                    ps.socket = socket.socket(ps.address_family,
+                                              ps.socket_type)
+                ps.server_bind()
+                ps.server_activate()
+            except OSError as e:
+                sys.stdout.write("portmapper: cannot bind %s port %d (%s);"
+                                 " v3 clients relying on the portmapper"
+                                 " will not find the server\n"
+                                 % (proto, args.pmap_port, e))
+                continue
+            ps.nfs = nfs
+            pmap_srvs.append((ps, proto))
+
     sys.stdout.write("nfsd.py: exporting %s on port %d (%s)\n"
                      % (root, args.port, "read-only" if args.ro else "read-write"))
     sys.stdout.write("mount with: mount -t nfs -o vers=4.0,port=%d,proto=tcp"
                      " HOST:/ /mnt/x\n" % args.port)
+    if pmap_srvs:
+        sys.stdout.write("portmapper v2 on port %d (%s): v3 clients can"
+                         " mount without port options\n"
+                         % (args.pmap_port,
+                            "+".join(proto for _, proto in pmap_srvs)))
     sys.stdout.flush()
     try:
+        for ps, _ in pmap_srvs:
+            _serve_in_thread(ps)
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        for ps, _ in pmap_srvs:
+            ps.server_close()
         srv.server_close()
         nfs.cache.close_all()
     return 0

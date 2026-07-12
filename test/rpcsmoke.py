@@ -339,10 +339,11 @@ def main():
     with open(os.path.join(export, "hello.txt"), "w") as f:
         f.write("hello smoke")
 
-    srv_nfs = nfsd.NfsServer(export, 0)
     srv = nfsd.Server(("127.0.0.1", 0), nfsd.ConnHandler)
-    srv.nfs = srv_nfs
     port = srv.server_address[1]
+    # created after the bind so the portmapper table advertises the real port
+    srv_nfs = nfsd.NfsServer(export, port)
+    srv.nfs = srv_nfs
     t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
     print("server on 127.0.0.1:%d exporting %s" % (port, export))
@@ -750,6 +751,96 @@ def main():
     up = m3(nfsd.MOUNTPROC3_EXPORT)
     check(up.boolean() and up.string() == "/",
           "MOUNT3 EXPORT lists the root")
+
+    # --- portmapper v2 (RFC 1833) ------------------------------------------
+
+    def pmap(proc, body=b""):
+        return rpc_call(sock, proc, body,
+                        prog=nfsd.PMAP_PROGRAM, vers=nfsd.PMAP_VERS)
+
+    def pmap_mapping(prog, vers, prot):
+        pk = nfsd.Packer()
+        pk.uint32(prog)
+        pk.uint32(vers)
+        pk.uint32(prot)
+        pk.uint32(0)                     # port: ignored by GETPORT
+        return pk.get()
+
+    # 31. NULL + GETPORT over the same TCP listener
+    pmap(nfsd.PMAPPROC_NULL)
+    check(True, "PMAP NULL ping")
+    up = pmap(nfsd.PMAPPROC_GETPORT,
+              pmap_mapping(nfsd.MOUNT_PROGRAM, nfsd.MOUNT_V3,
+                           nfsd.PMAP_IPPROTO_TCP))
+    check(up.uint32() == port, "PMAP GETPORT mountd/tcp -> server port")
+    up = pmap(nfsd.PMAPPROC_GETPORT,
+              pmap_mapping(nfsd.NFS_PROGRAM, nfsd.NFS_V3,
+                           nfsd.PMAP_IPPROTO_UDP))
+    check(up.uint32() == 0, "PMAP GETPORT nfs/udp -> 0 (not registered)")
+
+    # 32. DUMP lists the nfs v3/v4 and mountd mappings
+    up = pmap(nfsd.PMAPPROC_DUMP)
+    entries = []
+    while up.boolean():
+        entries.append(tuple(up.uint32() for _ in range(4)))
+    check((nfsd.NFS_PROGRAM, nfsd.NFS_V3, nfsd.PMAP_IPPROTO_TCP, port)
+          in entries
+          and (nfsd.NFS_PROGRAM, nfsd.NFS_V4, nfsd.PMAP_IPPROTO_TCP, port)
+          in entries
+          and (nfsd.MOUNT_PROGRAM, nfsd.MOUNT_V3, nfsd.PMAP_IPPROTO_TCP,
+               port) in entries,
+          "PMAP DUMP lists nfs v3+v4 and mountd")
+
+    # 33. SET is refused on the static table
+    up = pmap(nfsd.PMAPPROC_SET,
+              pmap_mapping(300000, 1, nfsd.PMAP_IPPROTO_TCP))
+    check(up.uint32() == 0, "PMAP SET refused")
+
+    # 34. GETPORT over UDP -- the transport BSD mount_nfs actually queries on
+    usrv = nfsd.UdpServer(("127.0.0.1", 0), nfsd.UdpHandler)
+    usrv.nfs = srv_nfs
+    uport = usrv.server_address[1]
+    nfsd._serve_in_thread(usrv)
+
+    def udp_call(proc, body, prog, vers):
+        _xid[0] += 1
+        xid = _xid[0]
+        pk = nfsd.Packer()
+        pk.uint32(xid)
+        pk.uint32(nfsd.CALL)
+        pk.uint32(nfsd.RPC_VERS)
+        pk.uint32(prog)
+        pk.uint32(vers)
+        pk.uint32(proc)
+        pk.uint32(nfsd.AUTH_NONE)
+        pk.opaque(b"")
+        pk.uint32(nfsd.AUTH_NONE)
+        pk.uint32(0)
+        pk.raw(body)
+        us = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        us.settimeout(10)
+        try:
+            us.sendto(pk.get(), ("127.0.0.1", uport))
+            data, _ = us.recvfrom(65536)
+        finally:
+            us.close()
+        up = nfsd.Unpacker(data)
+        assert up.uint32() == xid, "udp xid mismatch"
+        assert up.uint32() == nfsd.REPLY
+        assert up.uint32() == nfsd.MSG_ACCEPTED, "udp rpc denied"
+        up.uint32()
+        up.opaque()                      # verifier
+        assert up.uint32() == nfsd.SUCCESS
+        return up
+
+    up = udp_call(nfsd.PMAPPROC_GETPORT,
+                  pmap_mapping(nfsd.NFS_PROGRAM, nfsd.NFS_V3,
+                               nfsd.PMAP_IPPROTO_TCP),
+                  nfsd.PMAP_PROGRAM, nfsd.PMAP_VERS)
+    check(up.uint32() == port, "PMAP GETPORT over UDP -> server port")
+
+    usrv.shutdown()
+    usrv.server_close()
 
     sock.close()
     srv.shutdown()

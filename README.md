@@ -44,6 +44,20 @@ macOS:
 sudo mount -t nfs -o vers=4,port=2049,resvport HOST:/ /Volumes/x
 ```
 
+BSD v3 clients whose `mount_nfs` has no `mountport=` option (OpenBSD,
+NetBSD, DragonFly) can only discover the MOUNT/NFS ports through a
+portmapper on port 111. Start the server with `-pmap` and they mount with
+no port options at all (TCP must be selected; these clients default their
+portmapper queries to UDP, which `-pmap` also answers):
+
+```sh
+python3 nfsd.py -dir /path/to/export -pmap
+
+mount -t nfs -o -T HOST:/ /mnt/x        # OpenBSD
+mount -t nfs -o tcp HOST:/ /mnt/x       # NetBSD (TCP is its default)
+mount_nfs -3 -T HOST:/ /mnt/x           # DragonFly
+```
+
 ### Options
 
 | Option      | Default   | Meaning                                    |
@@ -55,11 +69,18 @@ sudo mount -t nfs -o vers=4,port=2049,resvport HOST:/ /Volumes/x
 | `-lease`    | `90`      | NFSv4 lease time (seconds)                 |
 | `-anonuid`  | `65534`   | uid reported/used for anonymous access     |
 | `-anongid`  | `65534`   | gid reported/used for anonymous access     |
+| `-pmap`     | off       | also serve portmapper v2 on port 111 (tcp+udp) |
+| `-pmap-port`| `111`     | portmapper port (for tests)                |
 | `-v`/`-vv`  | warnings  | info / per-operation debug logging         |
 
-No rpcbind/portmapper is needed for any version: NFSv4 uses a single port
-by design, and for NFSv3 both the NFS and MOUNT programs answer on this
-same port (`port=`/`mountport=`).
+No rpcbind/portmapper is needed for clients that can point at the port
+directly: NFSv4 uses a single port by design, and for NFSv3 both the NFS
+and MOUNT programs answer on this same port (`port=`/`mountport=`). For
+v3 clients that cannot (`mountport=` is Linux-only), `-pmap` serves a
+built-in portmapper v2 (RFC 1833) on port 111 whose static table points
+every program at the server port. Binding port 111 needs no privileges on
+Windows or macOS 10.14+; on Linux it needs root (a bind failure is logged
+and the server keeps running without it).
 
 Run the server as root if you want `chown` from clients to succeed on
 POSIX (only root may change file ownership); everything else works fine
@@ -74,6 +95,10 @@ unprivileged on a port >= 1024.
   PATHCONF/COMMIT) with wcc_data pre/post attributes, plus the MOUNT v3
   program (MNT/DUMP/UMNT/UMNTALL/EXPORT) dispatched on the same TCP
   port -- no rpcbind, no separate mountd.
+- Portmapper v2 (RFC 1833, opt-in via `-pmap`): NULL/GETPORT/DUMP over
+  TCP and UDP on port 111, answering from a static table that maps the
+  NFS (v3/v4) and MOUNT programs to the server port; SET/UNSET are
+  refused, CALLIT is unimplemented.
 - NFSv4.0 COMPOUND with the full operation set a Linux/macOS client uses:
   SETCLIENTID(_CONFIRM), RENEW, PUTROOTFH/PUTFH/GETFH/SAVEFH/RESTOREFH,
   LOOKUP(P), ACCESS, GETATTR/SETATTR, VERIFY/NVERIFY, READDIR, READLINK,
@@ -105,10 +130,12 @@ unprivileged on a port >= 1024.
   Windows), symlink-privilege probe.
 
 Verified end to end against the Linux kernel client (see `test/e2e.sh`,
-46 checks: vers=4.0 mount, read/write, 8 MiB checksum round-trip,
+49 checks: vers=4.0 mount, read/write, 8 MiB checksum round-trip,
 chmod/chown/truncate/mtime, rename incl. directory rename, symlink/
 hardlink, flock contention, 300-entry readdir, statfs -- then vers=3 and
-vers=4.1 re-mounts exercising the same core paths). Loopback throughput
+vers=4.1 re-mounts exercising the same core paths, and a `-pmap` leg in a
+private network namespace where the client mounts v3 with no port options,
+resolving everything through the built-in portmapper). Loopback throughput
 on a dev machine: ~266 MB/s write, ~168 MB/s read -- well above gigabit
 line rate.
 
@@ -125,8 +152,9 @@ python3 test/rpcsmoke.py    # protocol-level smoke; no privileges needed,
 NFSv4.0 and NFSv4.1 (RPC NULL, PUTROOTFH/LOOKUP/READ/WRITE/CREATE/
 SETATTR/REMOVE, the EXCHANGE_ID/CREATE_SESSION/SEQUENCE session flow with
 slot replay, GRACE gating, the current stateid, minor-version rejection,
-illegal opcodes, and a full MOUNT3+NFS3 pass: MNT/EXPORT, v3 create/
-write/read/setattr/readdirplus/rename/remove/fsinfo) -- this is also what
+illegal opcodes, a full MOUNT3+NFS3 pass: MNT/EXPORT, v3 create/
+write/read/setattr/readdirplus/rename/remove/fsinfo, and portmapper v2
+GETPORT/DUMP/SET over both TCP and UDP) -- this is also what
 CI runs on all three OSes. The Windows-hosted server has additionally
 been verified end to end with a real Linux kernel client (WSL2) including
 chmod/chown persistence into the NTFS ADS sidecar.
@@ -188,9 +216,10 @@ cross-checked for value equality during generation; a mismatch aborts.
 - NFSv3, NFSv4.0 and NFSv4.1 (no NFSv2, no NFSv4.2). No delegations, no
   Kerberos (AUTH_SYS trusts client-asserted uid/gid, standard LAN model).
 - NFSv3 has no NLM/NSM lock manager: mount with `nolock` (byte-range
-  locking works on v4.0/4.1). TCP only, and rpcbind is not provided, so
-  v3 clients must pass `port=`/`mountport=` explicitly; the native
-  Windows NFS client expects rpcbind on port 111 and is untested.
+  locking works on v4.0/4.1). NFS itself is TCP only; v3 clients either
+  pass `port=`/`mountport=` explicitly or use the `-pmap` portmapper
+  (which answers on TCP and UDP but only advertises TCP mappings). The
+  native Windows NFS client is untested.
 - NFSv4.1 runs fore channel only (no backchannel / callbacks), no pNFS,
   no SSV state protection, no session persistence.
 - No cross-restart handle persistence; no grace-period reclaim.

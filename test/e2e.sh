@@ -190,6 +190,43 @@ sudo chmod 0640 "$MNT/w41.txt"
 sudo flock -n -x "$MNT/w41.txt" -c true; check $? "4.1 flock"
 sudo rm "$MNT/w41.txt" "$MNT/rnd41.bin"; check $? "4.1 unlink"
 
+# --- portmapper (-pmap): v3 mount with NO port options ---
+# Runs in a private network namespace: the runner's own rpcbind (if any)
+# does not own port 111 there, so nfsd.py -pmap binds the real port 111
+# and the kernel client has to resolve BOTH the MOUNT and NFS ports
+# through nfsd.py's own portmapper (the path BSD clients depend on).
+sudo umount "$MNT"; check $? "umount before pmap"
+PMNT=/tmp/nfsdpy-pmap-mnt
+mkdir -p "$PMNT"
+SRC_ABS=$(readlink -f "$SRC")
+if sudo unshare -n true 2>/dev/null; then
+  cat > /tmp/nfsdpy-pmap-inner.sh <<EOF
+set -e
+ip link set lo up
+python3 "$SRC_ABS" -dir "$EXP" -port $PORT -pmap > /tmp/nfsdpy-pmap.log 2>&1 &
+SRV=\$!
+up=0
+for i in \$(seq 1 20); do
+  if bash -c "echo > /dev/tcp/127.0.0.1/111" 2>/dev/null; then up=1; break; fi
+  sleep 0.5
+done
+[ "\$up" = "1" ]
+timeout 30 mount -t nfs \
+  -o vers=3,proto=tcp,mountproto=tcp,nolock,soft,timeo=50,retrans=2 \
+  127.0.0.1:/ "$PMNT"
+[ "\$(cat "$PMNT/hello.txt")" = "hello from nfsd.py" ]
+echo "pmap ok" > "$PMNT/pmap-w.txt"
+umount "$PMNT"
+kill \$SRV
+EOF
+  sudo unshare -n bash /tmp/nfsdpy-pmap-inner.sh
+  check $? "pmap netns: v3 mount with no port options (portmapper only)"
+  [ "$(cat "$EXP/pmap-w.txt" 2>/dev/null)" = "pmap ok" ]
+  check $? "pmap netns: write visible in export"
+else
+  echo "SKIP: unshare -n unavailable; portmapper e2e skipped"
+fi
+
 echo
 echo "=== RESULT: $PASS passed, $FAIL failed ==="
 echo "--- last server log lines ---"
