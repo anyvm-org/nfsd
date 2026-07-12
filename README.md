@@ -89,6 +89,27 @@ The Windows-hosted server has additionally been verified end to end with a
 real Linux kernel client (WSL2) including chmod/chown persistence into the
 NTFS ADS sidecar.
 
+## Protocol conformance (pynfs)
+
+The [pynfs](https://github.com/kofemann/pynfs) NFSv4.0 servertests suite is
+the acceptance harness:
+
+```sh
+bash test/conformance.sh      # clones/builds pynfs, runs 600+ tests
+```
+
+Current standing: **534 passed / 50 failed / 7 warned of 601 executed**,
+zero server crashes or hangs. Every remaining failure is catalogued in
+`test/pynfs-known-failures.txt` and belongs to one deliberate gap: the
+strict NFSv4.0 seqid state machine (open/lock-owner BAD_SEQID enforcement,
+OLD_STATEID/STALE_STATEID generations, the at-most-once replay cache,
+SETCLIENTID callback nuances, READDIR cookie verifiers). Kernel clients on
+TCP do not depend on these for normal operation.
+
+CI treats that file as a baseline: any conformance failure not listed there
+fails the build; a listed test that starts passing is reported so the
+baseline can be tightened.
+
 ## Regenerating protocol constants
 
 ```sh

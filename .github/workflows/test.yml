@@ -48,3 +48,24 @@ jobs:
       - name: Server log
         if: always()
         run: cat /tmp/nfsdpy-12049.log || true
+
+  conformance-pynfs:
+    name: pynfs NFSv4.0 conformance (baseline diff)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install pynfs dependencies
+        run: sudo apt-get update && sudo apt-get install -y python3-ply
+
+      - name: Run conformance suite against known-failures baseline
+        run: bash test/conformance.sh 12061
+
+      - name: Full pynfs output
+        if: always()
+        run: tail -100 /tmp/pynfs-conformance.txt || true
+
+      - name: Server log
+        if: always()
+        run: tail -20 /tmp/nfsdpy-conformance.log || true

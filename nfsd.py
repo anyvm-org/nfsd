@@ -31,6 +31,7 @@ import stat as statmod
 import struct
 import sys
 import threading
+import time
 
 log = logging.getLogger("nfsd")
 
@@ -634,9 +635,13 @@ def pack_bitmap(attrs):
 
 
 def unpack_bitmap(up):
-    """Decode a bitmap4 into an ascending list of attribute numbers."""
+    """Decode a bitmap4 into an ascending list of attribute numbers.
+
+    Unknown high bits are legal on the wire (GETATTR must simply ignore
+    attributes it does not know), so accept generously sized bitmaps.
+    """
     n = up.uint32()
-    if n > 16:
+    if n > 1024:
         raise XdrError("bitmap too large")
     out = []
     for i in range(n):
@@ -896,7 +901,8 @@ class FileCache(object):
 # ---------------------------------------------------------------------------
 
 class _Client(object):
-    __slots__ = ("clientid", "verifier", "owner_id", "confirm", "confirmed")
+    __slots__ = ("clientid", "verifier", "owner_id", "confirm", "confirmed",
+                 "last_renew")
 
     def __init__(self, clientid, verifier, owner_id, confirm):
         self.clientid = clientid
@@ -904,6 +910,7 @@ class _Client(object):
         self.owner_id = owner_id
         self.confirm = confirm
         self.confirmed = False
+        self.last_renew = time.monotonic()
 
 
 class _Open(object):
@@ -932,8 +939,9 @@ MAX_END = 0xFFFFFFFFFFFFFFFF
 
 
 class State(object):
-    def __init__(self):
+    def __init__(self, lease=90):
         self.lock = threading.RLock()
+        self.lease = lease
         self.boot = os.urandom(4)
         self.next_clientid = 1
         self.next_state = 1
@@ -943,6 +951,26 @@ class State(object):
         self.opens_by_key = {}      # (clientid, owner, ino) -> _Open
         self.lock_states = {}       # other -> _LockState
         self.locks = {}             # ino -> [(owner, type, start, end)]
+        self.retired = set()        # stateid others invalidated by purge
+
+    def _purge_client_locked(self, clientid):
+        """Retire all opens/locks owned by a clientid (lease expiry or a
+        new confirmed incarnation). Their stateids answer NFS4ERR_EXPIRED."""
+        for other in [k for k, o in self.opens.items()
+                      if o.key[0] == clientid]:
+            o = self.opens.pop(other)
+            self.opens_by_key.pop(o.key, None)
+            self.retired.add(other)
+        for other in [k for k, ls in self.lock_states.items()
+                      if ls.owner[0] == clientid]:
+            self.lock_states.pop(other)
+            self.retired.add(other)
+        for ino in list(self.locks):
+            keep = [r for r in self.locks[ino] if r[0][0] != clientid]
+            if keep:
+                self.locks[ino] = keep
+            else:
+                self.locks.pop(ino, None)
 
     def _new_other(self):
         n = self.next_state
@@ -971,18 +999,25 @@ class State(object):
             if c is None or c.confirm != confirm:
                 raise NfsErr(NFS4ERR_STALE_CLIENTID)
             if not c.confirmed:
-                # retire any previous confirmed incarnation of this owner
+                # retire any previous confirmed incarnation of this owner:
+                # its state is purged and its stateids become EXPIRED
                 prev = self.by_owner_id.get(c.owner_id)
                 if prev is not None and prev != clientid:
                     self.clients.pop(prev, None)
+                    self._purge_client_locked(prev)
                 c.confirmed = True
                 self.by_owner_id[c.owner_id] = clientid
+            c.last_renew = time.monotonic()
 
     def check_client(self, clientid):
         with self.lock:
             c = self.clients.get(clientid)
             if c is None or not c.confirmed:
                 raise NfsErr(NFS4ERR_STALE_CLIENTID)
+            if time.monotonic() - c.last_renew > self.lease:
+                self._purge_client_locked(clientid)
+                raise NfsErr(NFS4ERR_EXPIRED)
+            c.last_renew = time.monotonic()
 
     # -- opens -----------------------------------------------------------
     def open_file(self, clientid, owner, ino, access, deny):
@@ -1053,9 +1088,35 @@ class State(object):
         return None
 
     def lock_range(self, ino, owner, offset, length, locktype):
+        """Upsert semantics per RFC 7530: a lock by the same owner replaces
+        its own overlapping ranges (up/downgrade), and adjacent or
+        overlapping same-type ranges merge into one."""
         start, end = self._range(offset, length)
+        ltype = READ_LT if locktype in (READ_LT, READW_LT) else WRITE_LT
         with self.lock:
-            self.locks.setdefault(ino, []).append((owner, locktype, start, end))
+            segs = []
+            for r in self.locks.get(ino, ()):
+                r_owner, r_type, r_start, r_end = r
+                if r_owner != owner or r_start >= end or r_end <= start:
+                    segs.append(r)
+                    continue
+                if r_start < start:
+                    segs.append((r_owner, r_type, r_start, start))
+                if r_end > end:
+                    segs.append((r_owner, r_type, end, r_end))
+            mine = sorted(
+                [r for r in segs if r[0] == owner and r[1] == ltype]
+                + [(owner, ltype, start, end)],
+                key=lambda r: r[2])
+            rest = [r for r in segs if not (r[0] == owner and r[1] == ltype)]
+            merged = []
+            for r in mine:
+                if merged and r[2] <= merged[-1][3]:
+                    if r[3] > merged[-1][3]:
+                        merged[-1] = (owner, ltype, merged[-1][2], r[3])
+                else:
+                    merged.append(r)
+            self.locks[ino] = rest + merged
 
     def unlock_range(self, ino, owner, offset, length):
         start, end = self._range(offset, length)
@@ -1090,12 +1151,10 @@ class State(object):
 
     def release_lockowner(self, owner):
         with self.lock:
-            for ino in list(self.locks):
-                keep = [r for r in self.locks[ino] if r[0] != owner]
-                if keep:
-                    self.locks[ino] = keep
-                else:
-                    self.locks.pop(ino, None)
+            for ranges in self.locks.values():
+                if any(r[0] == owner for r in ranges):
+                    # RFC 7530: cannot release an owner with locks held
+                    raise NfsErr(NFS4ERR_LOCKS_HELD)
             for other in [k for k, ls in self.lock_states.items()
                           if ls.owner == owner]:
                 self.lock_states.pop(other, None)
@@ -1186,6 +1245,8 @@ class Ctx(object):
 def valid_name(name):
     if name == "":
         raise NfsErr(NFS4ERR_INVAL)
+    if len(name.encode("utf-8", "surrogateescape")) > 255:
+        raise NfsErr(NFS4ERR_NAMETOOLONG)
     if name in (".", ".."):
         raise NfsErr(NFS4ERR_BADNAME)
     if "/" in name or "\0" in name:
@@ -1233,8 +1294,19 @@ class NfsServer(object):
     def path_of(self, ino):
         return self.imap.path_of(ino)
 
+    def dir_path_of(self, ino):
+        """Resolve an inode that must be a directory. A symlink yields
+        NFS4ERR_SYMLINK, any other non-directory NFS4ERR_NOTDIR."""
+        path = self.path_of(ino)
+        st = self.lstat(path)
+        if statmod.S_ISLNK(st.st_mode):
+            raise NfsErr(NFS4ERR_SYMLINK)
+        if not statmod.S_ISDIR(st.st_mode):
+            raise NfsErr(NFS4ERR_NOTDIR)
+        return path
+
     def child_path(self, dir_ino, name):
-        return os.path.join(self.path_of(dir_ino), valid_name(name))
+        return os.path.join(self.dir_path_of(dir_ino), valid_name(name))
 
     def lstat(self, path):
         try:
@@ -1321,6 +1393,24 @@ class NfsServer(object):
         pk.opaque(vals.get())
         return pk.get()
 
+    @staticmethod
+    def _decode_settime(up):
+        how = up.uint32()
+        if how != SET_TO_CLIENT_TIME4:
+            return "now"
+        sec = up.int64()
+        nsec = up.uint32()
+        if nsec >= 10**9:
+            raise NfsErr(NFS4ERR_INVAL)
+        return sec * 10**9 + nsec
+
+    @staticmethod
+    def _decode_principal(up):
+        s = up.string()
+        if s == "":
+            raise NfsErr(NFS4ERR_INVAL)
+        return parse_owner(s)
+
     def decode_settable(self, bits, up, for_create=False):
         """Decode attrlist values for SETATTR/OPEN-create. Returns dict."""
         out = {}
@@ -1330,21 +1420,13 @@ class NfsServer(object):
             elif a == FATTR4_MODE:
                 out["mode"] = up.uint32() & 0o7777
             elif a == FATTR4_OWNER:
-                out["uid"] = parse_owner(up.string())
+                out["uid"] = self._decode_principal(up)
             elif a == FATTR4_OWNER_GROUP:
-                out["gid"] = parse_owner(up.string())
+                out["gid"] = self._decode_principal(up)
             elif a == FATTR4_TIME_ACCESS_SET:
-                how = up.uint32()
-                if how == SET_TO_CLIENT_TIME4:
-                    out["atime_ns"] = up.int64() * 10**9 + up.uint32()
-                else:
-                    out["atime_ns"] = "now"
+                out["atime_ns"] = self._decode_settime(up)
             elif a == FATTR4_TIME_MODIFY_SET:
-                how = up.uint32()
-                if how == SET_TO_CLIENT_TIME4:
-                    out["mtime_ns"] = up.int64() * 10**9 + up.uint32()
-                else:
-                    out["mtime_ns"] = "now"
+                out["mtime_ns"] = self._decode_settime(up)
             elif a in ATTR_ENCODERS:
                 raise NfsErr(NFS4ERR_INVAL)   # read-only attribute
             else:
@@ -1658,11 +1740,22 @@ class NfsServer(object):
         pack_stateid(pk, o.seqid + 1, other)
         return pk.get()
 
+    def _require_regular(self, path):
+        """Guard for data ops: opening a FIFO/device would block or fail,
+        so refuse non-regular files up front with the spec's errors."""
+        st = self.lstat(path)
+        if statmod.S_ISDIR(st.st_mode):
+            raise NfsErr(NFS4ERR_ISDIR)
+        if not statmod.S_ISREG(st.st_mode):
+            raise NfsErr(NFS4ERR_INVAL)
+        return st
+
     def op_commit(self, ctx, up):
         up.uint64()                      # offset
         up.uint32()                      # count
         ino = ctx.need_cfh()
         path = self.path_of(ino)
+        self._require_regular(path)
         if not self.read_only:
             try:
                 e = self.cache.get(ino, path, True)
@@ -1750,6 +1843,9 @@ class NfsServer(object):
 
     def op_getattr(self, ctx, up):
         want = set(unpack_bitmap(up))
+        # write-only attributes may not be requested with GETATTR
+        if want & {FATTR4_TIME_ACCESS_SET, FATTR4_TIME_MODIFY_SET}:
+            raise NfsErr(NFS4ERR_INVAL)
         ino = ctx.need_cfh()
         path = self.path_of(ino)
         st = self.lstat(path)
@@ -1772,6 +1868,8 @@ class NfsServer(object):
         if self.read_only:
             raise NfsErr(NFS4ERR_ROFS)
         src = self.path_of(src_ino)
+        if statmod.S_ISDIR(self.lstat(src).st_mode):
+            raise NfsErr(NFS4ERR_ISDIR)   # hard links to directories
         dst = self.child_path(dir_ino, name)
         dpath = self.path_of(dir_ino)
         before = self.dir_cinfo(dpath)
@@ -1830,6 +1928,12 @@ class NfsServer(object):
         cfh = ctx.need_cfh()
         if ino != cfh:
             ino = cfh
+        lpath = self.path_of(ino)
+        lst = self.lstat(lpath)
+        if statmod.S_ISDIR(lst.st_mode):
+            raise NfsErr(NFS4ERR_ISDIR)
+        if not statmod.S_ISREG(lst.st_mode):
+            raise NfsErr(NFS4ERR_INVAL)
         conflict = self.state.find_conflict(ino, owner, offset, length, locktype)
         if conflict is not None:
             return self._denied_body(conflict)
@@ -1848,6 +1952,13 @@ class NfsServer(object):
         clientid = up.uint64()
         owner_bytes = up.opaque(NFS4_OPAQUE_LIMIT)
         ino = ctx.need_cfh()
+        self.state.check_client(clientid)
+        tpath = self.path_of(ino)
+        tst = self.lstat(tpath)
+        if statmod.S_ISDIR(tst.st_mode):
+            raise NfsErr(NFS4ERR_ISDIR)
+        if not statmod.S_ISREG(tst.st_mode):
+            raise NfsErr(NFS4ERR_INVAL)
         conflict = self.state.find_conflict(
             ino, (clientid, owner_bytes), offset, length, locktype)
         if conflict is not None:
@@ -1877,9 +1988,12 @@ class NfsServer(object):
         name = up.string()
         dir_ino = ctx.need_cfh()
         path = self.child_path(dir_ino, name)
-        dst = self.path_of(dir_ino)
-        if not statmod.S_ISDIR(self.lstat(dst).st_mode):
-            raise NfsErr(NFS4ERR_NOTDIR)
+        dpath = self.path_of(dir_ino)
+        dst = self.lstat(dpath)
+        d_uid, d_gid, d_mode = self.file_ugm(dir_ino, dpath, dst)
+        if not self.check_access(ctx, dst, d_uid, d_gid, d_mode,
+                                 False, False, True):
+            raise NfsErr(NFS4ERR_ACCESS)   # no search permission on the dir
         if not os.path.lexists(path):
             raise NfsErr(NFS4ERR_NOENT)
         ctx.cfh = self.imap.get_or_alloc(dir_ino, name)
@@ -1889,6 +2003,7 @@ class NfsServer(object):
 
     def op_lookupp(self, ctx, up):
         ino = ctx.need_cfh()
+        self.dir_path_of(ino)          # non-directory cfh -> NFS4ERR_NOTDIR
         if ino == ROOT_INO:
             raise NfsErr(NFS4ERR_NOENT)
         ctx.cfh = self.imap.parent_of(ino)
@@ -1900,6 +2015,9 @@ class NfsServer(object):
         bits = unpack_bitmap(up)
         theirs = up.opaque()
         for a in bits:
+            if a in (FATTR4_TIME_ACCESS_SET, FATTR4_TIME_MODIFY_SET,
+                     FATTR4_RDATTR_ERROR):
+                raise NfsErr(NFS4ERR_INVAL)
             if a not in ATTR_ENCODERS:
                 raise NfsErr(NFS4ERR_ATTRNOTSUPP)
         ino = ctx.need_cfh()
@@ -1986,14 +2104,17 @@ class NfsServer(object):
                     raise NfsErr(NFS4ERR_EXIST)
                 ino0 = self.imap.get_or_alloc(dir_ino, name)
                 if not existed:
-                    if "mode" in cvals:
+                    # apply ALL createattrs (size, mode, owner, times) on a
+                    # brand-new file, not just the mode
+                    if cvals:
                         try:
-                            applied += self.apply_attrs(
-                                ino0, path, {"mode": cvals["mode"]})
+                            applied += self.apply_attrs(ino0, path, cvals)
                         except OSError:
                             pass
                     self._chown_new(path, ctx, ino0)
                 elif createhow == UNCHECKED4 and cvals.get("size") == 0:
+                    # for UNCHECKED opens of an existing file only a zero
+                    # size attribute is honored (truncate)
                     applied += self.apply_attrs(ino0, path, {"size": 0})
         else:
             if not os.path.lexists(path):
@@ -2004,6 +2125,10 @@ class NfsServer(object):
         if statmod.S_ISDIR(st.st_mode):
             raise NfsErr(NFS4ERR_ISDIR)
         if statmod.S_ISLNK(st.st_mode):
+            raise NfsErr(NFS4ERR_SYMLINK)
+        if not statmod.S_ISREG(st.st_mode):
+            # OPEN of a special file (fifo/device/socket); RFC 7530
+            # sec 16.16 assigns NFS4ERR_SYMLINK to non-regular objects
             raise NfsErr(NFS4ERR_SYMLINK)
         if opentype != OPEN4_CREATE:
             uid, gid, mode = self.file_ugm(ino, path, st)
@@ -2027,17 +2152,13 @@ class NfsServer(object):
         return pk.get()
 
     def op_open_confirm(self, ctx, up):
-        seqid, other = unpack_stateid(up)
+        unpack_stateid(up)
         up.uint32()
         ctx.need_cfh()
-        o = self.state.get_open(other)
-        if o is None:
-            raise NfsErr(NFS4ERR_BAD_STATEID)
-        o.seqid += 1
-        pk = Packer()
-        pk.uint32(NFS4_OK)
-        pack_stateid(pk, o.seqid, o.other)
-        return pk.get()
+        # This server never sets OPEN4_RESULT_CONFIRM, so no open is ever
+        # awaiting confirmation; any OPEN_CONFIRM targets a non-pending
+        # stateid and is answered with NFS4ERR_BAD_STATEID (RFC 7530).
+        raise NfsErr(NFS4ERR_BAD_STATEID)
 
     def op_open_downgrade(self, ctx, up):
         seqid, other = unpack_stateid(up)
@@ -2068,11 +2189,25 @@ class NfsServer(object):
         pk.uint32(NFS4_OK)
         return pk.get()
 
-    def _check_stateid_for_io(self, sid):
+    def _check_stateid_for_io(self, sid, need_write=False, ino=None):
         if sid in (ZERO_STATEID, ONES_STATEID):
             return
-        if not self.state.stateid_known(sid[1]):
-            raise NfsErr(NFS4ERR_BAD_STATEID)
+        other = sid[1]
+        o = self.state.get_open(other)
+        if o is not None:
+            if ino is not None and o.ino != ino:
+                raise NfsErr(NFS4ERR_BAD_STATEID)   # stateid of another file
+            if need_write and not (o.access & OPEN4_SHARE_ACCESS_WRITE):
+                raise NfsErr(NFS4ERR_OPENMODE)
+            return
+        ls = self.state.get_lock_state(other)
+        if ls is not None:
+            if ino is not None and ls.ino != ino:
+                raise NfsErr(NFS4ERR_BAD_STATEID)
+            return
+        if other in self.state.retired:
+            raise NfsErr(NFS4ERR_EXPIRED)
+        raise NfsErr(NFS4ERR_BAD_STATEID)
 
     def op_read(self, ctx, up):
         sid = unpack_stateid(up)
@@ -2082,10 +2217,15 @@ class NfsServer(object):
         self._check_stateid_for_io(sid)
         count = min(count, MAXIO)
         path = self.path_of(ino)
+        self._require_regular(path)
         try:
             e = self.cache.get(ino, path, False)
-            data = FileCache.pread(e, count, offset)
             size = FileCache.size(e)
+            if offset >= size:
+                # includes absurdly large offsets that os.pread would reject
+                data = b""
+            else:
+                data = FileCache.pread(e, count, offset)
         except OSError as err:
             raise NfsErr(oserror_to_stat(err))
         pk = Packer()
@@ -2100,10 +2240,15 @@ class NfsServer(object):
         dircount = up.uint32()
         maxcount = up.uint32()
         want = sorted(set(unpack_bitmap(up)))
+        if set(want) & {FATTR4_TIME_ACCESS_SET, FATTR4_TIME_MODIFY_SET}:
+            raise NfsErr(NFS4ERR_INVAL)
         dir_ino = ctx.need_cfh()
-        dpath = self.path_of(dir_ino)
+        dpath = self.dir_path_of(dir_ino)
         if cookie in (1, 2):
             raise NfsErr(NFS4ERR_BAD_COOKIE)
+        # even an empty reply needs cookieverf(8) + two booleans
+        if maxcount < 16:
+            raise NfsErr(NFS4ERR_TOOSMALL)
         try:
             names = sorted(os.listdir(dpath))
         except NotADirectoryError:
@@ -2275,13 +2420,19 @@ class NfsServer(object):
         bits = unpack_bitmap(up)
         alist = Unpacker(up.opaque())
         vals = self.decode_settable(bits, alist)
+        if alist.pos != len(alist.data):
+            # extraneous bytes after the last decoded attribute
+            raise NfsErr(NFS4ERR_BADXDR)
         ino = ctx.need_cfh()
         if "size" in vals:
-            self._check_stateid_for_io(sid)
+            self._check_stateid_for_io(sid, need_write=True, ino=ino)
         path = self.path_of(ino)
         st = self.lstat(path)
-        if "size" in vals and statmod.S_ISDIR(st.st_mode):
-            raise NfsErr(NFS4ERR_ISDIR)
+        if "size" in vals:
+            if statmod.S_ISDIR(st.st_mode):
+                raise NfsErr(NFS4ERR_ISDIR)
+            if not statmod.S_ISREG(st.st_mode):
+                raise NfsErr(NFS4ERR_INVAL)
         try:
             applied = self.apply_attrs(ino, path, vals)
         except OSError as e:
@@ -2329,8 +2480,9 @@ class NfsServer(object):
         ino = ctx.need_cfh()
         if self.read_only:
             raise NfsErr(NFS4ERR_ROFS)
-        self._check_stateid_for_io(sid)
+        self._check_stateid_for_io(sid, need_write=True, ino=ino)
         path = self.path_of(ino)
+        self._require_regular(path)
         try:
             e = self.cache.get(ino, path, True)
             n = FileCache.pwrite(e, data, offset)
