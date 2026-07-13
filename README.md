@@ -66,6 +66,7 @@ mount_nfs -3 -T HOST:/ /mnt/x           # DragonFly
 | `-port`     | `2049`    | TCP port to listen on                      |
 | `-bind`     | `0.0.0.0` | bind address                               |
 | `-ro`       | off       | export read-only                           |
+| `-vers`     | all       | serve only one major version: `3` or `4`   |
 | `-lease`    | `90`      | NFSv4 lease time (seconds)                 |
 | `-anonuid`  | `65534`   | uid reported/used for anonymous access     |
 | `-anongid`  | `65534`   | gid reported/used for anonymous access     |

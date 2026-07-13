@@ -36,7 +36,8 @@ def check(cond, label):
 _xid = [100]
 
 
-def rpc_call(sock, proc, body, cred_uid=0, cred_gid=0, prog=None, vers=None):
+def rpc_call(sock, proc, body, cred_uid=0, cred_gid=0, prog=None, vers=None,
+             accept=None):
     _xid[0] += 1
     xid = _xid[0]
     pk = nfsd.Packer()
@@ -68,7 +69,8 @@ def rpc_call(sock, proc, body, cred_uid=0, cred_gid=0, prog=None, vers=None):
     up.uint32()
     up.opaque()                    # verifier
     astat = up.uint32()
-    assert astat == nfsd.SUCCESS, "accept_stat %d" % astat
+    want = nfsd.SUCCESS if accept is None else accept
+    assert astat == want, "accept_stat %d (wanted %d)" % (astat, want)
     return up
 
 
@@ -928,6 +930,64 @@ def main():
                 ps.server_close()
         else:
             print("SKIP: port 111 already in use; macos pmap test skipped")
+
+    # --- version gating (-vers 3 / -vers 4) --------------------------------
+
+    # 37. a v3-only server: v4 refused with mismatch_info (3,3), v3 works
+    srv3 = nfsd.Server(("127.0.0.1", 0), nfsd.ConnHandler)
+    p3 = srv3.server_address[1]
+    srv3.nfs = nfsd.NfsServer(export, p3, versions=(3,))
+    nfsd._serve_in_thread(srv3)
+    s3 = socket.create_connection(("127.0.0.1", p3), timeout=10)
+
+    up = rpc_call(s3, nfsd.NFSPROC4_COMPOUND, b"",
+                  accept=nfsd.PROG_MISMATCH)
+    lo, hi = up.uint32(), up.uint32()
+    check((lo, hi) == (nfsd.NFS_V3, nfsd.NFS_V3),
+          "vers=3: v4 COMPOUND -> PROG_MISMATCH (3,3)")
+    rpc_call(s3, nfsd.NFSPROC3_NULL, b"",
+             prog=nfsd.NFS_PROGRAM, vers=nfsd.NFS_V3)
+    check(True, "vers=3: NFS3 NULL accepted")
+    pk = nfsd.Packer()
+    pk.string("/")
+    up = rpc_call(s3, nfsd.MOUNTPROC3_MNT, pk.get(),
+                  prog=nfsd.MOUNT_PROGRAM, vers=nfsd.MOUNT_V3)
+    check(up.uint32() == nfsd.MNT3_OK, "vers=3: MOUNT MNT works")
+    up = rpc_call(s3, nfsd.PMAPPROC_DUMP, b"",
+                  prog=nfsd.PMAP_PROG, vers=nfsd.PMAP_VERS)
+    progs3 = set()
+    while up.boolean():
+        e = tuple(up.uint32() for _ in range(4))
+        progs3.add((e[0], e[1]))
+    check((nfsd.NFS_PROGRAM, nfsd.NFS_V4) not in progs3
+          and (nfsd.NFS_PROGRAM, nfsd.NFS_V3) in progs3,
+          "vers=3: portmapper only advertises v3")
+    s3.close()
+    srv3.shutdown()
+    srv3.server_close()
+
+    # 38. a v4-only server: v3 and MOUNT refused, v4 works
+    srv4 = nfsd.Server(("127.0.0.1", 0), nfsd.ConnHandler)
+    p4 = srv4.server_address[1]
+    srv4.nfs = nfsd.NfsServer(export, p4, versions=(4,))
+    nfsd._serve_in_thread(srv4)
+    s4 = socket.create_connection(("127.0.0.1", p4), timeout=10)
+
+    up = rpc_call(s4, nfsd.NFSPROC3_NULL, b"",
+                  prog=nfsd.NFS_PROGRAM, vers=nfsd.NFS_V3,
+                  accept=nfsd.PROG_MISMATCH)
+    lo, hi = up.uint32(), up.uint32()
+    check((lo, hi) == (nfsd.NFS_V4, nfsd.NFS_V4),
+          "vers=4: NFS3 call -> PROG_MISMATCH (4,4)")
+    rpc_call(s4, nfsd.MOUNTPROC3_NULL, b"",
+             prog=nfsd.MOUNT_PROGRAM, vers=nfsd.MOUNT_V3,
+             accept=nfsd.PROG_UNAVAIL)
+    check(True, "vers=4: MOUNT program -> PROG_UNAVAIL")
+    st, n, up = compound(s4, [op_putrootfh(), op_getfh()])
+    check(st == nfsd.NFS4_OK, "vers=4: v4.0 compound works")
+    s4.close()
+    srv4.shutdown()
+    srv4.server_close()
 
     sock.close()
     srv.shutdown()

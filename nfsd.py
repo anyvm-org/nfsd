@@ -2161,12 +2161,14 @@ def valid_name(name):
 
 class NfsServer(object):
     def __init__(self, root, port, read_only=False, lease=90,
-                 anon_uid=65534, anon_gid=65534):
+                 anon_uid=65534, anon_gid=65534, versions=(3, 4)):
         global ATTR_ENCODERS
         if ATTR_ENCODERS is None:
             ATTR_ENCODERS = _build_attr_encoders()
         self.root = root
         self.port = port
+        # major NFS versions served: 3 (NFSv3 + MOUNT), 4 (NFSv4.0 + 4.1)
+        self.versions = frozenset(versions)
         self.read_only = read_only
         self.lease = lease
         self.anon_uid = anon_uid
@@ -2504,6 +2506,8 @@ class NfsServer(object):
         if prog == MOUNT_PROGRAM:
             # MOUNT v3 (RFC 1813 sec 5) served on the same TCP port, so no
             # rpcbind is needed: mount with port=/mountport= pointing here
+            if 3 not in self.versions:
+                return accepted(PROG_UNAVAIL)
             if vers != MOUNT_V3:
                 pk = Packer()
                 pk.uint32(MOUNT_V3)
@@ -2520,7 +2524,7 @@ class NfsServer(object):
 
         if prog != NFS4_PROGRAM:          # == NFS_PROGRAM (100003)
             return accepted(PROG_UNAVAIL)
-        if vers == NFS_V3:
+        if vers == NFS_V3 and 3 in self.versions:
             if proc == NFSPROC3_NULL:
                 return accepted(SUCCESS)
             fn = self.ops3.get(proc)
@@ -2532,10 +2536,11 @@ class NfsServer(object):
                 log.warning("nfs3 garbage args: %s", e)
                 return accepted(GARBAGE_ARGS)
             return accepted(SUCCESS, body)
-        if vers != NFS_V4:
+        if vers != NFS_V4 or 4 not in self.versions:
+            # mismatch_info reflects only the versions being served
             pk = Packer()
-            pk.uint32(NFS_V3)
-            pk.uint32(NFS_V4)
+            pk.uint32(NFS_V3 if 3 in self.versions else NFS_V4)
+            pk.uint32(NFS_V4 if 4 in self.versions else NFS_V3)
             return accepted(PROG_MISMATCH, pk.get())
         if proc == NFSPROC4_NULL:
             return accepted(SUCCESS)
@@ -4150,11 +4155,14 @@ class NfsServer(object):
     def _pmap_mappings(self):
         """Every (prog, vers, prot, port) tuple this server serves. All
         programs share the one TCP listener port."""
-        return (
-            (NFS_PROGRAM, NFS_V3, IPPROTO_TCP, self.port),
-            (NFS_PROGRAM, NFS_V4, IPPROTO_TCP, self.port),
-            (MOUNT_PROGRAM, MOUNT_V3, IPPROTO_TCP, self.port),
-        )
+        out = []
+        if 3 in self.versions:
+            out.append((NFS_PROGRAM, NFS_V3, IPPROTO_TCP, self.port))
+        if 4 in self.versions:
+            out.append((NFS_PROGRAM, NFS_V4, IPPROTO_TCP, self.port))
+        if 3 in self.versions:
+            out.append((MOUNT_PROGRAM, MOUNT_V3, IPPROTO_TCP, self.port))
+        return tuple(out)
 
     def pmap_null(self, up):
         return b""
@@ -5361,6 +5369,9 @@ def main(argv=None):
                     help="lease time in seconds (default 90)")
     ap.add_argument("-anonuid", type=int, default=65534)
     ap.add_argument("-anongid", type=int, default=65534)
+    ap.add_argument("-vers", choices=("3", "4"), default=None,
+                    help="serve only this NFS major version: 3 (NFSv3 +"
+                         " MOUNT) or 4 (NFSv4.0 + 4.1); default: all")
     ap.add_argument("-pmap", action="store_true",
                     help="also serve portmapper v2 (RFC 1833) on port 111"
                          " tcp+udp, for NFSv3 clients without a mountport="
@@ -5384,8 +5395,10 @@ def main(argv=None):
     if hasattr(os, "umask"):
         os.umask(0)
 
+    versions = (3, 4) if args.vers is None else (int(args.vers),)
     nfs = NfsServer(root, args.port, read_only=args.ro, lease=args.lease,
-                    anon_uid=args.anonuid, anon_gid=args.anongid)
+                    anon_uid=args.anonuid, anon_gid=args.anongid,
+                    versions=versions)
 
     srv = Server((args.bind, args.port), ConnHandler,
                  bind_and_activate=False)
@@ -5400,10 +5413,19 @@ def main(argv=None):
     if args.pmap:
         pmap_srvs = start_pmap_servers(nfs, args.bind, args.pmap_port)
 
-    sys.stdout.write("nfsd.py: exporting %s on port %d (%s)\n"
-                     % (root, args.port, "read-only" if args.ro else "read-write"))
-    sys.stdout.write("mount with: mount -t nfs -o vers=4.0,port=%d,proto=tcp"
-                     " HOST:/ /mnt/x\n" % args.port)
+    vlabel = {(3,): "v3", (4,): "v4.0/v4.1",
+              (3, 4): "v3/v4.0/v4.1"}[tuple(sorted(versions))]
+    sys.stdout.write("nfsd.py: exporting %s on port %d (%s, %s)\n"
+                     % (root, args.port,
+                        "read-only" if args.ro else "read-write", vlabel))
+    if 4 in versions:
+        sys.stdout.write("mount with: mount -t nfs -o"
+                         " vers=4.0,port=%d,proto=tcp HOST:/ /mnt/x\n"
+                         % args.port)
+    else:
+        sys.stdout.write("mount with: mount -t nfs -o vers=3,port=%d,"
+                         "mountport=%d,mountproto=tcp,proto=tcp,nolock"
+                         " HOST:/ /mnt/x\n" % (args.port, args.port))
     if pmap_srvs:
         sys.stdout.write("portmapper v2 on port %d (%s): v3 clients can"
                          " mount without port options\n"
