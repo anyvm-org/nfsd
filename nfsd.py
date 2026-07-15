@@ -2297,6 +2297,45 @@ class SideMeta(object):
 XATTR_NS = "user."
 XATTR_VALUE_MAX = 65536          # larger values get NFS4ERR_XATTR2BIG
 
+# Darwin xattr flags (man 2 setxattr)
+_MAC_XATTR_CREATE = 0x0002
+_MAC_XATTR_REPLACE = 0x0004
+_MAC_LIBC = None
+
+
+def _mac_xattr_libc():
+    """libc bound for Darwin's xattr calls, or None off Darwin.
+
+    CPython exposes os.getxattr and friends on Linux only, but Darwin has
+    the same calls with an extra (position, options) pair, so ctypes gets
+    macOS the same functionality.
+    """
+    global _MAC_LIBC
+    if _MAC_LIBC is None:
+        if sys.platform != "darwin":
+            _MAC_LIBC = False
+            return None
+        try:
+            import ctypes
+            import ctypes.util
+            lib = ctypes.CDLL(ctypes.util.find_library("c") or "libc.dylib",
+                              use_errno=True)
+            cc, cv, cs = ctypes.c_char_p, ctypes.c_void_p, ctypes.c_size_t
+            lib.getxattr.argtypes = [cc, cc, cv, cs, ctypes.c_uint32,
+                                     ctypes.c_int]
+            lib.getxattr.restype = ctypes.c_ssize_t
+            lib.setxattr.argtypes = [cc, cc, cv, cs, ctypes.c_uint32,
+                                     ctypes.c_int]
+            lib.setxattr.restype = ctypes.c_int
+            lib.listxattr.argtypes = [cc, cv, cs, ctypes.c_int]
+            lib.listxattr.restype = ctypes.c_ssize_t
+            lib.removexattr.argtypes = [cc, cc, ctypes.c_int]
+            lib.removexattr.restype = ctypes.c_int
+            _MAC_LIBC = lib
+        except Exception:
+            _MAC_LIBC = False
+    return _MAC_LIBC or None
+
 
 class XattrStore(object):
     """Backing store for GETXATTR/SETXATTR/LISTXATTRS/REMOVEXATTR.
@@ -2307,7 +2346,8 @@ class XattrStore(object):
 
     def __init__(self, side):
         self.side = side
-        self.posix = hasattr(os, "getxattr")
+        self.posix = hasattr(os, "getxattr")     # Linux: os.*xattr
+        self.mac = None if self.posix else _mac_xattr_libc()
 
     def supported(self, path):
         """Whether this export can store xattrs (fattr4_xattr_support)."""
@@ -2317,7 +2357,45 @@ class XattrStore(object):
                 return True
             except OSError:
                 return False
+        if self.mac:
+            return self._mac_call(
+                self.mac.listxattr, os.fsencode(path), None, 0, 0,
+                probe=True) is not None
         return IS_WINDOWS
+
+    def _mac_call(self, fn, *args, **kw):
+        """Run a Darwin xattr call, raising NfsErr on failure. probe=True
+        returns None instead of raising (capability probing)."""
+        import ctypes
+        ctypes.set_errno(0)
+        rc = fn(*args)
+        if rc < 0:
+            e = OSError(ctypes.get_errno(), "xattr")
+            if kw.get("probe"):
+                return None
+            raise self._map_err(e)
+        return rc
+
+    def _mac_get(self, path, name):
+        p, n = os.fsencode(path), name.encode("utf-8")
+        size = self._mac_call(self.mac.getxattr, p, n, None, 0, 0, 0)
+        if size == 0:
+            return b""
+        import ctypes
+        buf = ctypes.create_string_buffer(size)
+        got = self._mac_call(self.mac.getxattr, p, n, buf, size, 0, 0)
+        return buf.raw[:got]
+
+    def _mac_list(self, path):
+        p = os.fsencode(path)
+        size = self._mac_call(self.mac.listxattr, p, None, 0, 0)
+        if size == 0:
+            return []
+        import ctypes
+        buf = ctypes.create_string_buffer(size)
+        got = self._mac_call(self.mac.listxattr, p, buf, size, 0)
+        return [n.decode("utf-8", "surrogateescape")
+                for n in buf.raw[:got].split(b"\0") if n]
 
     @staticmethod
     def _osname(name):
@@ -2332,6 +2410,8 @@ class XattrStore(object):
                 return os.getxattr(path, self._osname(name))
             except OSError as e:
                 raise self._map_err(e)
+        if self.mac:
+            return self._mac_get(path, self._osname(name))
         m = self._sidecar_map(ino, path)
         if name not in m:
             raise NfsErr(NFS4ERR_NOXATTR)
@@ -2351,6 +2431,16 @@ class XattrStore(object):
             except OSError as e:
                 raise self._map_err(e)
             return
+        if self.mac:
+            flags = 0
+            if option == SETXATTR4_CREATE:
+                flags = _MAC_XATTR_CREATE
+            elif option == SETXATTR4_REPLACE:
+                flags = _MAC_XATTR_REPLACE
+            self._mac_call(self.mac.setxattr, os.fsencode(path),
+                           self._osname(name).encode("utf-8"),
+                           value, len(value), 0, flags)
+            return
         m = self._sidecar_map(ino, path)
         if option == SETXATTR4_CREATE and name in m:
             raise NfsErr(NFS4ERR_EXIST)
@@ -2366,6 +2456,10 @@ class XattrStore(object):
             except OSError as e:
                 raise self._map_err(e)
             return
+        if self.mac:
+            self._mac_call(self.mac.removexattr, os.fsencode(path),
+                           self._osname(name).encode("utf-8"), 0)
+            return
         m = self._sidecar_map(ino, path)
         if name not in m:
             raise NfsErr(NFS4ERR_NOXATTR)
@@ -2374,19 +2468,25 @@ class XattrStore(object):
 
     def list(self, ino, path):
         """Every xattr name of the file, namespace prefix stripped."""
-        if self.posix:
-            try:
-                names = os.listxattr(path)
-            except OSError as e:
-                raise self._map_err(e)
+        if self.posix or self.mac:
+            if self.posix:
+                try:
+                    names = os.listxattr(path)
+                except OSError as e:
+                    raise self._map_err(e)
+            else:
+                names = self._mac_list(path)
             return sorted(n[len(XATTR_NS):] for n in names
                           if n.startswith(XATTR_NS))
         return sorted(self._sidecar_map(ino, path))
 
     @staticmethod
     def _map_err(e):
+        # "no such attribute" is ENODATA on Linux and ENOATTR (93) on
+        # Darwin, where errno has no ENOATTR name to look it up by
         no_attr = (getattr(errno, "ENODATA", None),
-                   getattr(errno, "ENOATTR", None))
+                   getattr(errno, "ENOATTR", None),
+                   93 if sys.platform == "darwin" else None)
         if e.errno in no_attr:
             return NfsErr(NFS4ERR_NOXATTR)
         if e.errno == errno.EEXIST:

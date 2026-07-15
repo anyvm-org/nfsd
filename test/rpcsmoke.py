@@ -1092,6 +1092,14 @@ def main():
     def xa_file(ops):
         return [op_putrootfh(), op_lookup("file42.bin")] + ops
 
+    # An export on a filesystem that cannot store xattrs must decline the
+    # whole feature rather than half-implement it, so the checks below
+    # follow what the server advertises.
+    xattr_ok = srv_nfs.xattr_ok
+    print("xattr backend: %s" % ("posix" if srv_nfs.xattrs.posix else
+                                 "darwin" if srv_nfs.xattrs.mac else
+                                 "sidecar" if xattr_ok else "none"))
+
     def getattr_bitmap(up_):
         """Decode a GETATTR result into (returned-bitmap, values-reader)."""
         nw_ = up_.uint32()
@@ -1102,8 +1110,8 @@ def main():
         w, b = divmod(attr, 32)
         return len(words_) > w and bool(words_[w] & (1 << b))
 
-    # 43. xattr_support is a 4.2 attribute: returned there, absent in 4.0,
-    # and listed in the 4.2 supported_attrs bitmap
+    # 43. xattr_support is a 4.2 attribute: advertised exactly when the
+    # export can store xattrs, absent in 4.0 either way
     st, n, up = c42([op_putrootfh(),
                      op_getattr([nfsd.FATTR4_SUPPORTED_ATTRS,
                                  nfsd.FATTR4_XATTR_SUPPORT])])
@@ -1112,13 +1120,14 @@ def main():
     up.uint32(); up.uint32()             # PUTROOTFH
     up.uint32(); up.uint32()             # GETATTR opnum + status
     words, vals = getattr_bitmap(up)
-    check(has_attr(words, nfsd.FATTR4_XATTR_SUPPORT),
-          "4.2 GETATTR returns xattr_support")
+    check(has_attr(words, nfsd.FATTR4_XATTR_SUPPORT) == xattr_ok,
+          "4.2 GETATTR returns xattr_support iff supported")
     nsupp = vals.uint32()
     supp = [vals.uint32() for _ in range(nsupp)]
-    check(has_attr(supp, nfsd.FATTR4_XATTR_SUPPORT),
-          "4.2 supported_attrs advertises xattr_support")
-    check(vals.boolean(), "4.2 xattr_support is TRUE")
+    check(has_attr(supp, nfsd.FATTR4_XATTR_SUPPORT) == xattr_ok,
+          "4.2 supported_attrs advertises xattr_support iff supported")
+    if xattr_ok:
+        check(vals.boolean(), "4.2 xattr_support is TRUE")
 
     st, n, up = compound(sock, [op_putrootfh(),
                                 op_getattr([nfsd.FATTR4_SUPPORTED_ATTRS,
@@ -1134,70 +1143,89 @@ def main():
     check(not has_attr(supp0, nfsd.FATTR4_XATTR_SUPPORT),
           "4.0 supported_attrs omits xattr_support")
 
-    # 44. GETXATTR of a missing key -> NOXATTR
-    st, n, up = c42(xa_file([op_getxattr("user.attr1")]))
-    check(st == nfsd.NFS4ERR_NOXATTR, "xattr GETXATTR missing -> NOXATTR")
+    def xattr_supported_checks():
+        # 44. GETXATTR of a missing key -> NOXATTR
+        st_, n_, up_ = c42(xa_file([op_getxattr("user.attr1")]))
+        check(st_ == nfsd.NFS4ERR_NOXATTR, "xattr GETXATTR missing -> NOXATTR")
 
-    # 45. SETXATTR(CREATE) then GETXATTR round-trip
-    st, n, up = c42(xa_file([op_setxattr(nfsd.SETXATTR4_CREATE,
-                                         "user.attr1", b"value1")]))
-    check(st == nfsd.NFS4_OK, "xattr SETXATTR create OK")
-    st, n, up = c42(xa_file([op_getxattr("user.attr1")]))
-    check(st == nfsd.NFS4_OK, "xattr GETXATTR OK")
-    skip_sequence_res(up)
-    up.uint32(); up.uint32()
-    up.uint32(); up.uint32()
-    up.uint32(); up.uint32()
-    check(up.opaque() == b"value1", "xattr GETXATTR returns the value")
+        # 45. SETXATTR(CREATE) then GETXATTR round-trip
+        st_, n_, up_ = c42(xa_file([op_setxattr(nfsd.SETXATTR4_CREATE,
+                                                "user.attr1", b"value1")]))
+        check(st_ == nfsd.NFS4_OK, "xattr SETXATTR create OK")
+        st_, n_, up_ = c42(xa_file([op_getxattr("user.attr1")]))
+        check(st_ == nfsd.NFS4_OK, "xattr GETXATTR OK")
+        skip_sequence_res(up_)
+        up_.uint32(); up_.uint32()
+        up_.uint32(); up_.uint32()
+        up_.uint32(); up_.uint32()
+        check(up_.opaque() == b"value1", "xattr GETXATTR returns the value")
 
-    # 46. CREATE of an existing key -> EXIST; REPLACE of a missing -> NOXATTR
-    st, n, up = c42(xa_file([op_setxattr(nfsd.SETXATTR4_CREATE,
-                                         "user.attr1", b"other")]))
-    check(st == nfsd.NFS4ERR_EXIST, "xattr SETXATTR create existing -> EXIST")
-    st, n, up = c42(xa_file([op_setxattr(nfsd.SETXATTR4_REPLACE,
-                                         "user.nope", b"x")]))
-    check(st == nfsd.NFS4ERR_NOXATTR,
-          "xattr SETXATTR replace missing -> NOXATTR")
+        # 46. CREATE of an existing key -> EXIST; REPLACE of missing -> NOXATTR
+        st_, n_, up_ = c42(xa_file([op_setxattr(nfsd.SETXATTR4_CREATE,
+                                                "user.attr1", b"other")]))
+        check(st_ == nfsd.NFS4ERR_EXIST,
+              "xattr SETXATTR create existing -> EXIST")
+        st_, n_, up_ = c42(xa_file([op_setxattr(nfsd.SETXATTR4_REPLACE,
+                                                "user.nope", b"x")]))
+        check(st_ == nfsd.NFS4ERR_NOXATTR,
+              "xattr SETXATTR replace missing -> NOXATTR")
 
-    # 47. REPLACE and EITHER both update
-    st, n, up = c42(xa_file([op_setxattr(nfsd.SETXATTR4_REPLACE,
-                                         "user.attr1", b"value2")]))
-    check(st == nfsd.NFS4_OK, "xattr SETXATTR replace OK")
-    st, n, up = c42(xa_file([op_setxattr(nfsd.SETXATTR4_EITHER,
-                                         "user.attr2", b"v2")]))
-    check(st == nfsd.NFS4_OK, "xattr SETXATTR either creates")
+        # 47. REPLACE and EITHER both update
+        st_, n_, up_ = c42(xa_file([op_setxattr(nfsd.SETXATTR4_REPLACE,
+                                                "user.attr1", b"value2")]))
+        check(st_ == nfsd.NFS4_OK, "xattr SETXATTR replace OK")
+        st_, n_, up_ = c42(xa_file([op_setxattr(nfsd.SETXATTR4_EITHER,
+                                                "user.attr2", b"v2")]))
+        check(st_ == nfsd.NFS4_OK, "xattr SETXATTR either creates")
 
-    # 48. LISTXATTRS lists both keys with eof
-    st, n, up = c42(xa_file([op_listxattrs(0, 8192)]))
-    check(st == nfsd.NFS4_OK, "xattr LISTXATTRS OK")
-    skip_sequence_res(up)
-    up.uint32(); up.uint32()
-    up.uint32(); up.uint32()
-    up.uint32(); up.uint32()
-    up.uint64()                          # lxr_cookie
-    cnt = up.uint32()
-    listed = [up.string() for _ in range(cnt)]
-    check(up.boolean(), "xattr LISTXATTRS eof set")
-    check(sorted(listed) == ["user.attr1", "user.attr2"],
-          "xattr LISTXATTRS lists both keys")
+        # 48. LISTXATTRS lists both keys with eof
+        st_, n_, up_ = c42(xa_file([op_listxattrs(0, 8192)]))
+        check(st_ == nfsd.NFS4_OK, "xattr LISTXATTRS OK")
+        skip_sequence_res(up_)
+        up_.uint32(); up_.uint32()
+        up_.uint32(); up_.uint32()
+        up_.uint32(); up_.uint32()
+        up_.uint64()                     # lxr_cookie
+        cnt = up_.uint32()
+        listed = [up_.string() for _ in range(cnt)]
+        check(up_.boolean(), "xattr LISTXATTRS eof set")
+        check(sorted(listed) == ["user.attr1", "user.attr2"],
+              "xattr LISTXATTRS lists both keys")
 
-    # 49. REMOVEXATTR, then it is gone; removing again -> NOXATTR
-    st, n, up = c42(xa_file([op_removexattr("user.attr2")]))
-    check(st == nfsd.NFS4_OK, "xattr REMOVEXATTR OK")
-    st, n, up = c42(xa_file([op_removexattr("user.attr2")]))
-    check(st == nfsd.NFS4ERR_NOXATTR, "xattr REMOVEXATTR again -> NOXATTR")
+        # 49. REMOVEXATTR, then it is gone; removing again -> NOXATTR
+        st_, n_, up_ = c42(xa_file([op_removexattr("user.attr2")]))
+        check(st_ == nfsd.NFS4_OK, "xattr REMOVEXATTR OK")
+        st_, n_, up_ = c42(xa_file([op_removexattr("user.attr2")]))
+        check(st_ == nfsd.NFS4ERR_NOXATTR,
+              "xattr REMOVEXATTR again -> NOXATTR")
 
-    # 50. a too-small maxcount that cannot hold one name -> TOOSMALL
-    st, n, up = c42(xa_file([op_listxattrs(0, 8)]))
-    check(st == nfsd.NFS4ERR_TOOSMALL, "xattr LISTXATTRS tiny -> TOOSMALL")
+        # 50. a maxcount too small for even one name -> TOOSMALL
+        st_, n_, up_ = c42(xa_file([op_listxattrs(0, 8)]))
+        check(st_ == nfsd.NFS4ERR_TOOSMALL,
+              "xattr LISTXATTRS tiny -> TOOSMALL")
 
-    # 51. the xattr ops are 4.2-only
-    st, n, up = compound(sock, [op_sequence(sid42, sq[0] + 1, 0),
-                                op_putrootfh(), op_getxattr("user.attr1")],
-                         minor=1)
-    sq[0] += 1
-    check(st == nfsd.NFS4ERR_OP_ILLEGAL,
-          "GETXATTR in a 4.1 compound -> ILLEGAL")
+        # 51. the xattr ops are 4.2-only
+        sq[0] += 1
+        st_, n_, up_ = compound(sock, [op_sequence(sid42, sq[0], 0),
+                                       op_putrootfh(),
+                                       op_getxattr("user.attr1")], minor=1)
+        check(st_ == nfsd.NFS4ERR_OP_ILLEGAL,
+              "GETXATTR in a 4.1 compound -> ILLEGAL")
+
+    def xattr_unsupported_checks():
+        # an export whose filesystem cannot store xattrs must decline the
+        # feature outright rather than half-implement it
+        st_, n_, up_ = c42(xa_file([op_getxattr("user.attr1")]))
+        check(st_ == nfsd.NFS4ERR_OP_ILLEGAL,
+              "xattr declined: GETXATTR -> OP_ILLEGAL")
+        st_, n_, up_ = c42(xa_file([op_listxattrs(0, 8192)]))
+        check(st_ == nfsd.NFS4ERR_OP_ILLEGAL,
+              "xattr declined: LISTXATTRS -> OP_ILLEGAL")
+
+    if xattr_ok:
+        xattr_supported_checks()
+    else:
+        xattr_unsupported_checks()
 
     # 42. a 4.2-only op must not exist in a 4.1 compound (same session:
     # the minorversion of the compound, not the session, picks the op table)
