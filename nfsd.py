@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """nfsd.py - a cross-platform, user-space NFS server in one pure-Python file.
 
-Exports a single local directory over NFSv3, NFSv4.0 and NFSv4.1 on a
-configurable TCP port. Standard library only (sockets + basic filesystem
-operations); no kernel module, no FUSE, no third-party dependencies. Runs
-on Linux, Windows, macOS.
+Exports a single local directory over NFSv3, NFSv4.0, NFSv4.1 and NFSv4.2
+on a configurable TCP port. Standard library only (sockets + basic
+filesystem operations); no kernel module, no FUSE, no third-party
+dependencies. Runs on Linux, Windows, macOS.
 
 Usage:
     python3 nfsd.py -dir /path/to/export -port 2049
 
 Mount (Linux):
-    mount -t nfs -o vers=4.0,port=2049,proto=tcp,sec=sys HOST:/ /mnt/x
+    mount -t nfs -o vers=4.2,port=2049,proto=tcp,sec=sys HOST:/ /mnt/x
 
 With -pmap it also answers portmapper v2 queries on port 111 (tcp+udp), so
 NFSv3 clients without a mountport= mount option (OpenBSD, NetBSD,
@@ -21,6 +21,7 @@ Protocol references:
     RFC 7530 - NFSv4.0 protocol
     RFC 7531 - NFSv4.0 XDR description (constants machine-extracted below)
     RFC 5661/5662 - NFSv4.1 protocol + XDR
+    RFC 7862/7863 - NFSv4.2 protocol + XDR (every feature OPTIONAL)
     RFC 1813 - NFSv3 + MOUNT v3
     RFC 1833 - portmapper v2
     RFC 5531 - ONC RPC v2
@@ -633,6 +634,70 @@ OP_CB_WANTS_CANCELLED = 12
 OP_CB_NOTIFY_LOCK = 13
 OP_CB_NOTIFY_DEVICEID = 14
 
+# --- RFC 7863 top-level consts (NFSv4.2-new) ---
+FATTR4_CLONE_BLKSIZE = 77
+FATTR4_SPACE_FREED = 78
+FATTR4_CHANGE_ATTR_TYPE = 79
+FATTR4_SEC_LABEL = 80
+NFL42_UFLG_IO_ADVISE_THRU_MDS = 4
+EXCHGID4_FLAG_SUPP_FENCE_OPS = 4
+
+# --- RFC 7863 enum nfsstat4 (NFSv4.2-new members) ---
+NFS4ERR_PARTNER_NOTSUPP = 10088
+NFS4ERR_PARTNER_NO_AUTH = 10089
+NFS4ERR_UNION_NOTSUPP = 10090
+NFS4ERR_OFFLOAD_DENIED = 10091
+NFS4ERR_WRONG_LFS = 10092
+NFS4ERR_BADLABEL = 10093
+NFS4ERR_OFFLOAD_NO_REQS = 10094
+
+# --- RFC 7863 enum netloc_type4 (NFSv4.2-new members) ---
+NL4_NAME = 1
+NL4_URL = 2
+NL4_NETADDR = 3
+
+# --- RFC 7863 enum change_attr_type4 (NFSv4.2-new members) ---
+NFS4_CHANGE_TYPE_IS_MONOTONIC_INCR = 0
+NFS4_CHANGE_TYPE_IS_VERSION_COUNTER = 1
+NFS4_CHANGE_TYPE_IS_VERSION_COUNTER_NOPNFS = 2
+NFS4_CHANGE_TYPE_IS_TIME_METADATA = 3
+NFS4_CHANGE_TYPE_IS_UNDEFINED = 4
+
+# --- RFC 7863 enum data_content4 (NFSv4.2-new members) ---
+NFS4_CONTENT_DATA = 0
+NFS4_CONTENT_HOLE = 1
+
+# --- RFC 7863 enum nfs_opnum4 (NFSv4.2-new members) ---
+OP_ALLOCATE = 59
+OP_COPY = 60
+OP_COPY_NOTIFY = 61
+OP_DEALLOCATE = 62
+OP_IO_ADVISE = 63
+OP_LAYOUTERROR = 64
+OP_LAYOUTSTATS = 65
+OP_OFFLOAD_CANCEL = 66
+OP_OFFLOAD_STATUS = 67
+OP_READ_PLUS = 68
+OP_SEEK = 69
+OP_WRITE_SAME = 70
+OP_CLONE = 71
+
+# --- RFC 7863 enum IO_ADVISE_type4 (NFSv4.2-new members) ---
+IO_ADVISE4_NORMAL = 0
+IO_ADVISE4_SEQUENTIAL = 1
+IO_ADVISE4_SEQUENTIAL_BACKWARDS = 2
+IO_ADVISE4_RANDOM = 3
+IO_ADVISE4_WILLNEED = 4
+IO_ADVISE4_WILLNEED_OPPORTUNISTIC = 5
+IO_ADVISE4_DONTNEED = 6
+IO_ADVISE4_NOREUSE = 7
+IO_ADVISE4_READ = 8
+IO_ADVISE4_WRITE = 9
+IO_ADVISE4_INIT_PROXIMITY = 10
+
+# --- RFC 7863 enum nfs_cb_opnum4 (NFSv4.2-new members) ---
+OP_CB_OFFLOAD = 15
+
 # --- RFC 1813 sec 2.4 size constants ---
 NFS3_FHSIZE = 64
 NFS3_COOKIEVERFSIZE = 8
@@ -933,6 +998,13 @@ NFSSTAT4_NAMES = {
     10085: 'NFS4ERR_REJECT_DELEG',
     10086: 'NFS4ERR_RETURNCONFLICT',
     10087: 'NFS4ERR_DELEG_REVOKED',
+    10088: 'NFS4ERR_PARTNER_NOTSUPP',
+    10089: 'NFS4ERR_PARTNER_NO_AUTH',
+    10090: 'NFS4ERR_UNION_NOTSUPP',
+    10091: 'NFS4ERR_OFFLOAD_DENIED',
+    10092: 'NFS4ERR_WRONG_LFS',
+    10093: 'NFS4ERR_BADLABEL',
+    10094: 'NFS4ERR_OFFLOAD_NO_REQS',
 }
 
 OP_NAMES = {
@@ -992,6 +1064,19 @@ OP_NAMES = {
     56: 'OP_WANT_DELEGATION',
     57: 'OP_DESTROY_CLIENTID',
     58: 'OP_RECLAIM_COMPLETE',
+    59: 'OP_ALLOCATE',
+    60: 'OP_COPY',
+    61: 'OP_COPY_NOTIFY',
+    62: 'OP_DEALLOCATE',
+    63: 'OP_IO_ADVISE',
+    64: 'OP_LAYOUTERROR',
+    65: 'OP_LAYOUTSTATS',
+    66: 'OP_OFFLOAD_CANCEL',
+    67: 'OP_OFFLOAD_STATUS',
+    68: 'OP_READ_PLUS',
+    69: 'OP_SEEK',
+    70: 'OP_WRITE_SAME',
+    71: 'OP_CLONE',
     10044: 'OP_ILLEGAL',
 }
 # === END GENERATED CONSTANTS ===
@@ -1289,6 +1374,37 @@ def fh_ino(b):
     return struct.unpack(">Q", b)[0]
 
 
+# Linux fallocate(2) flags for real hole punching (uapi/linux/falloc.h);
+# libc is loaded lazily and only on Linux -- everywhere else the caller
+# falls back to writing zeros.
+FALLOC_FL_KEEP_SIZE = 0x01
+FALLOC_FL_PUNCH_HOLE = 0x02
+_LIBC = None
+
+
+def _punch_hole_linux(fd, off, length):
+    """Punch a real hole with fallocate(2). True if the hole was punched."""
+    global _LIBC
+    if not sys.platform.startswith("linux"):
+        return False
+    if _LIBC is None:
+        try:
+            import ctypes
+            import ctypes.util
+            lib = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6",
+                              use_errno=True)
+            lib.fallocate.argtypes = [ctypes.c_int, ctypes.c_int,
+                                      ctypes.c_int64, ctypes.c_int64]
+            lib.fallocate.restype = ctypes.c_int
+            _LIBC = lib
+        except Exception:
+            _LIBC = False
+    if not _LIBC:
+        return False
+    mode = FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE
+    return _LIBC.fallocate(fd, mode, off, length) == 0
+
+
 # ---------------------------------------------------------------------------
 # open-file handle cache (the Java version's WriteChannelCache lesson:
 # per-op open/close dominates write cost; reuse descriptors keyed by inode)
@@ -1383,6 +1499,51 @@ class FileCache(object):
     @staticmethod
     def ftruncate(e, n):
         os.ftruncate(e.fd, n)
+
+    @staticmethod
+    def lseek(e, off, whence):
+        """Sparse-file seek for NFSv4.2 SEEK. Needs SEEK_DATA/SEEK_HOLE
+        (Linux 3.1+, Solaris); the caller handles their absence."""
+        with e.lock:
+            return os.lseek(e.fd, off, whence)
+
+    @staticmethod
+    def fallocate(e, off, length):
+        """Reserve backing blocks for [off, off+length) (NFSv4.2 ALLOCATE).
+
+        os.posix_fallocate is Linux/BSD-only. Elsewhere, extend the file if
+        the region lies past EOF -- the size effect ALLOCATE promises (RFC
+        7862 sec 15.1.3) without the space reservation."""
+        if hasattr(os, "posix_fallocate"):
+            with e.lock:
+                os.posix_fallocate(e.fd, off, length)
+            return
+        with e.lock:
+            if off + length > os.fstat(e.fd).st_size:
+                os.ftruncate(e.fd, off + length)
+
+    @staticmethod
+    def punch_hole(e, off, length):
+        """Unreserve [off, off+length), reading back as zeros (NFSv4.2
+        DEALLOCATE). Real hole punching needs Linux fallocate(2) flags via
+        ctypes; the portable fallback writes zeros, which keeps the READ
+        semantics the spec requires while not freeing the blocks."""
+        with e.lock:
+            size = os.fstat(e.fd).st_size
+            if off >= size:
+                return
+            length = min(length, size - off)
+            if _punch_hole_linux(e.fd, off, length):
+                return
+            zeros = b"\0" * min(length, 1 << 20)
+            done = 0
+            while done < length:
+                n = min(len(zeros), length - done)
+                if hasattr(os, "pwrite"):
+                    done += os.pwrite(e.fd, zeros[:n], off + done)
+                else:
+                    os.lseek(e.fd, off + done, os.SEEK_SET)
+                    done += os.write(e.fd, zeros[:n])
 
 
 # ---------------------------------------------------------------------------
@@ -2182,6 +2343,7 @@ class NfsServer(object):
         self.excl_verfs = {}
         self.ops = self._build_ops()
         self.ops41 = self._build_ops41()
+        self.ops42 = self._build_ops42()
         self.ops3 = self._build_ops3()
         self.mountops3 = self._build_mountops3()
         self.pmapops = self._build_pmapops()
@@ -2199,6 +2361,10 @@ class NfsServer(object):
         self.supported_attrs.remove(FATTR4_SUPPATTR_EXCLCREAT)
         self.supported_attrs41 = sorted(
             self.supported_attrs + [FATTR4_SUPPATTR_EXCLCREAT])
+        # NFSv4.2 adds no REQUIRED attribute we do not already have: every
+        # 4.2 attribute (clone_blksize, space_freed, change_attr_type,
+        # sec_label, ...) is OPTIONAL (RFC 7862 sec 12) and unsupported
+        self.supported_attrs42 = self.supported_attrs41
         # attrs a client may set in an EXCLUSIVE4_1 create (cva_attrs);
         # time_access_set/time_modify_set are excluded (RFC 5661 sec 18.16.3)
         self.exclcreat_attrs = [
@@ -2565,6 +2731,8 @@ class NfsServer(object):
             opstable = self.ops
         elif minor == 1:
             opstable = self.ops41
+        elif minor == 2:
+            opstable = self.ops42
         else:
             pk = Packer()
             pk.uint32(NFS4ERR_MINOR_VERS_MISMATCH)
@@ -2612,10 +2780,11 @@ class NfsServer(object):
             total += len(results[-1])
             return stat
 
-        if minor == 1 and nops > 0:
-            # RFC 5661 sec 2.10.2: the first op of a 4.1 compound is either
-            # SEQUENCE or one of the few ops usable outside a session (and
-            # then it must be the only op).
+        if minor >= 1 and nops > 0:
+            # RFC 5661 sec 2.10.2 (which 4.2 inherits unchanged): the first
+            # op of a session-based compound is either SEQUENCE or one of
+            # the few ops usable outside a session (and then it must be the
+            # only op).
             opnum = up.uint32()
             remaining = nops - 1
             if opnum == OP_SEQUENCE:
@@ -2854,6 +3023,29 @@ class NfsServer(object):
         ops[OP_SECINFO_NO_NAME] = self.op_secinfo_no_name
         ops[OP_FREE_STATEID] = self.op_free_stateid
         ops[OP_TEST_STATEID] = self.op_test_stateid
+        return ops
+
+    def _build_ops42(self):
+        """NFSv4.2 op table: the 4.1 ops plus the 4.2 additions.
+
+        RFC 7862 introduces no REQUIRED operation -- every 4.2 operation is
+        OPTIONAL (sec 1.2 / 15), so a server may answer any of them with
+        NFS4ERR_NOTSUPP. We implement the ones the local filesystem can
+        back honestly (SEEK, ALLOCATE, DEALLOCATE, intra-server COPY) and
+        refuse the rest: CLONE needs reflink, READ_PLUS/WRITE_SAME/
+        IO_ADVISE buy nothing here, inter-server COPY and the OFFLOAD_*
+        asynchronous machinery need a backchannel we do not run, and the
+        pNFS layout ops stay unsupported as in 4.1.
+        """
+        ops = dict(self.ops41)
+        for op in (OP_CLONE, OP_READ_PLUS, OP_WRITE_SAME, OP_IO_ADVISE,
+                   OP_COPY_NOTIFY, OP_OFFLOAD_CANCEL, OP_OFFLOAD_STATUS,
+                   OP_LAYOUTERROR, OP_LAYOUTSTATS):
+            ops[op] = self.op_notsupp
+        ops[OP_SEEK] = self.op_seek
+        ops[OP_ALLOCATE] = self.op_allocate
+        ops[OP_DEALLOCATE] = self.op_deallocate
+        ops[OP_COPY] = self.op_copy
         return ops
 
     def op_access(self, ctx, up):
@@ -4027,6 +4219,162 @@ class NfsServer(object):
         pk.uint32(len(codes))
         for c in codes:
             pk.uint32(c)
+        return pk.get()
+
+    # -- NFSv4.2 ops (RFC 7862 sec 15 / RFC 7863 XDR) ----------------------
+    # All of NFSv4.2 is OPTIONAL, so each of these may also legitimately
+    # answer NFS4ERR_NOTSUPP; we implement what the local filesystem backs.
+
+    def _v42_write_target(self, ctx, sid):
+        """CURRENT_FH of a 4.2 space op: a regular file the stateid may
+        write (RFC 7862 sec 15.1.3/15.4.3: WRONG_TYPE if not regular)."""
+        ino = ctx.need_cfh()
+        if self.read_only:
+            raise NfsErr(NFS4ERR_ROFS)
+        path = self.path_of(ino)
+        st = self.lstat(path)
+        if statmod.S_ISDIR(st.st_mode):
+            raise NfsErr(NFS4ERR_WRONG_TYPE)
+        if not statmod.S_ISREG(st.st_mode):
+            raise NfsErr(NFS4ERR_WRONG_TYPE)
+        self._check_stateid_for_io(sid, ino, need_write=True)
+        return ino, path
+
+    @staticmethod
+    def _v42_range(offset, length):
+        if length == 0:
+            raise NfsErr(NFS4ERR_INVAL)
+        if offset + length > NFS4_INT64_MAX:
+            raise NfsErr(NFS4ERR_INVAL)
+        return offset, length
+
+    def op_seek(self, ctx, up):
+        sid = ctx.deref_sid(unpack_stateid(up))
+        offset = up.uint64()
+        what = up.uint32()
+        if what not in (NFS4_CONTENT_DATA, NFS4_CONTENT_HOLE):
+            raise NfsErr(NFS4ERR_UNION_NOTSUPP)
+        ino = ctx.need_cfh()
+        path = self.path_of(ino)
+        self._require_regular(path)
+        self._check_stateid_for_io(sid, ino)
+        e = self.cache.get(ino, path, False)
+        size = FileCache.size(e)
+        if offset >= size:
+            # RFC 7862 sec 15.11.3: past EOF is NFS4ERR_NXIO
+            raise NfsErr(NFS4ERR_NXIO)
+        whence = (getattr(os, "SEEK_DATA", None) if what == NFS4_CONTENT_DATA
+                  else getattr(os, "SEEK_HOLE", None))
+        if whence is None:
+            # No sparse-seek support (Windows, older kernels): report the
+            # file as one extent -- data starts here, and every file has a
+            # virtual hole at EOF (RFC 7862 sec 15.11.3).
+            found = offset if what == NFS4_CONTENT_DATA else size
+            eof = False
+        else:
+            try:
+                found = FileCache.lseek(e, offset, whence)
+                eof = False
+            except OSError as err:
+                import errno
+                if err.errno != errno.ENXIO:
+                    raise NfsErr(oserror_to_stat(err))
+                # ENXIO from SEEK_DATA: no data after offset -> sr_eof
+                found = size
+                eof = True
+        pk = Packer()
+        pk.uint32(NFS4_OK)
+        pk.boolean(eof)
+        pk.uint64(found)
+        return pk.get()
+
+    def op_allocate(self, ctx, up):
+        sid = ctx.deref_sid(unpack_stateid(up))
+        offset = up.uint64()
+        length = up.uint64()
+        self._v42_range(offset, length)
+        ino, path = self._v42_write_target(ctx, sid)
+        e = self.cache.get(ino, path, True)
+        try:
+            FileCache.fallocate(e, offset, length)
+        except OSError as err:
+            raise NfsErr(oserror_to_stat(err))
+        except NotImplementedError:
+            raise NfsErr(NFS4ERR_NOTSUPP)
+        pk = Packer()
+        pk.uint32(NFS4_OK)
+        return pk.get()
+
+    def op_deallocate(self, ctx, up):
+        sid = ctx.deref_sid(unpack_stateid(up))
+        offset = up.uint64()
+        length = up.uint64()
+        self._v42_range(offset, length)
+        ino, path = self._v42_write_target(ctx, sid)
+        e = self.cache.get(ino, path, True)
+        try:
+            FileCache.punch_hole(e, offset, length)
+        except OSError as err:
+            raise NfsErr(oserror_to_stat(err))
+        except NotImplementedError:
+            raise NfsErr(NFS4ERR_NOTSUPP)
+        pk = Packer()
+        pk.uint32(NFS4_OK)
+        return pk.get()
+
+    def op_copy(self, ctx, up):
+        src_sid = ctx.deref_sid(unpack_stateid(up))
+        dst_sid = ctx.deref_sid(unpack_stateid(up))
+        src_offset = up.uint64()
+        dst_offset = up.uint64()
+        count = up.uint64()
+        up.boolean()                     # ca_consecutive
+        synchronous = up.boolean()
+        n_src = up.uint32()
+        if n_src:
+            # inter-server copy: we are never a copy destination for a
+            # remote source (RFC 7862 sec 15.2.3)
+            raise NfsErr(NFS4ERR_NOTSUPP)
+        src_ino = ctx.need_sfh()
+        dst_ino = ctx.need_cfh()
+        if self.read_only:
+            raise NfsErr(NFS4ERR_ROFS)
+        src_path = self.path_of(src_ino)
+        dst_path = self.path_of(dst_ino)
+        self._require_regular(src_path)
+        self._require_regular(dst_path)
+        if src_ino == dst_ino:
+            # overlapping intra-file copy is the CLONE use case; refuse
+            raise NfsErr(NFS4ERR_INVAL)
+        self._check_stateid_for_io(src_sid, src_ino)
+        self._check_stateid_for_io(dst_sid, dst_ino, need_write=True)
+        se = self.cache.get(src_ino, src_path, False)
+        de = self.cache.get(dst_ino, dst_path, True)
+        src_size = FileCache.size(se)
+        if src_offset > src_size:
+            raise NfsErr(NFS4ERR_INVAL)
+        todo = (src_size - src_offset) if count == 0 else count
+        if src_offset + todo > src_size:
+            raise NfsErr(NFS4ERR_INVAL)
+        copied = 0
+        while copied < todo:
+            chunk = FileCache.pread(se, min(MAXIO, todo - copied),
+                                    src_offset + copied)
+            if not chunk:
+                break
+            wrote = FileCache.pwrite(de, chunk, dst_offset + copied)
+            copied += wrote
+        FileCache.fsync(de)
+        pk = Packer()
+        pk.uint32(NFS4_OK)
+        # write_response4: no callback stateid (we copied synchronously)
+        pk.uint32(0)                     # wr_callback_id<1>: empty
+        pk.uint64(copied)
+        pk.uint32(FILE_SYNC4)
+        pk.opaque_fixed(self.write_verf)
+        # copy_requirements4: we always copy consecutively and synchronously
+        pk.boolean(True)                 # cr_consecutive
+        pk.boolean(True)                 # cr_synchronous
         return pk.get()
 
     def op_setclientid(self, ctx, up):
@@ -5357,7 +5705,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="nfsd.py",
         description="cross-platform user-space NFS server"
-                    " (v3, v4.0, v4.1; pure Python)")
+                    " (v3, v4.0, v4.1, v4.2; pure Python)")
     ap.add_argument("-dir", required=True, metavar="PATH",
                     help="local directory to export")
     ap.add_argument("-port", type=int, default=2049,
@@ -5371,7 +5719,7 @@ def main(argv=None):
     ap.add_argument("-anongid", type=int, default=65534)
     ap.add_argument("-vers", choices=("3", "4"), default=None,
                     help="serve only this NFS major version: 3 (NFSv3 +"
-                         " MOUNT) or 4 (NFSv4.0 + 4.1); default: all")
+                         " MOUNT) or 4 (NFSv4.0/4.1/4.2); default: all")
     ap.add_argument("-pmap", action="store_true",
                     help="also serve portmapper v2 (RFC 1833) on port 111"
                          " tcp+udp, for NFSv3 clients without a mountport="
@@ -5413,14 +5761,14 @@ def main(argv=None):
     if args.pmap:
         pmap_srvs = start_pmap_servers(nfs, args.bind, args.pmap_port)
 
-    vlabel = {(3,): "v3", (4,): "v4.0/v4.1",
-              (3, 4): "v3/v4.0/v4.1"}[tuple(sorted(versions))]
+    vlabel = {(3,): "v3", (4,): "v4.0/v4.1/v4.2",
+              (3, 4): "v3/v4.0/v4.1/v4.2"}[tuple(sorted(versions))]
     sys.stdout.write("nfsd.py: exporting %s on port %d (%s, %s)\n"
                      % (root, args.port,
                         "read-only" if args.ro else "read-write", vlabel))
     if 4 in versions:
         sys.stdout.write("mount with: mount -t nfs -o"
-                         " vers=4.0,port=%d,proto=tcp HOST:/ /mnt/x\n"
+                         " vers=4.2,port=%d,proto=tcp HOST:/ /mnt/x\n"
                          % args.port)
     else:
         sys.stdout.write("mount with: mount -t nfs -o vers=3,port=%d,"

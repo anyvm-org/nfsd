@@ -5,9 +5,9 @@
 [![pynfs 4.1](https://img.shields.io/badge/pynfs%20NFSv4.1-172%2F184%20passed-brightgreen)](test/pynfs41-known-failures.txt)
 [![python](https://img.shields.io/badge/python-3.8%2B%20stdlib%20only-blue)](nfsd.py)
 
-A cross-platform, **user-space NFSv3 / NFSv4.0 / NFSv4.1 server in one
-pure-Python file**. Point it at a local directory and a TCP port, and any
-NFSv3, NFSv4.0 or NFSv4.1 client can mount it.
+A cross-platform, **user-space NFSv3 / NFSv4.0 / NFSv4.1 / NFSv4.2 server
+in one pure-Python file**. Point it at a local directory and a TCP port,
+and any NFSv3 or NFSv4.x client can mount it.
 
 - **Standard library only.** No third-party packages, no C extensions, no
   kernel module, no FUSE. Just sockets and basic filesystem operations.
@@ -15,8 +15,8 @@ NFSv3, NFSv4.0 or NFSv4.1 client can mount it.
   macOS) and start it.
 - **Spec-derived protocol tables.** Every protocol constant is
   machine-extracted from RFC 1813 (NFSv3), RFC 7531 (NFSv4.0 XDR), RFC 5662
-  (NFSv4.1 XDR) and RFC 5531 (ONC RPC) by `tools/gen_constants.py` -- no
-  hand-typed magic numbers.
+  (NFSv4.1 XDR), RFC 7863 (NFSv4.2 XDR), RFC 1833 (portmapper) and RFC 5531
+  (ONC RPC) by `tools/gen_constants.py` -- no hand-typed magic numbers.
 
 ## Usage
 
@@ -24,9 +24,10 @@ NFSv3, NFSv4.0 or NFSv4.1 client can mount it.
 python3 nfsd.py -dir /path/to/export -port 2049
 ```
 
-Mount from Linux (vers=4.1 sessions, vers=4.0, and vers=3 all work):
+Mount from Linux (vers=4.2, vers=4.1, vers=4.0 and vers=3 all work):
 
 ```sh
+sudo mount -t nfs -o vers=4.2,port=2049,proto=tcp,sec=sys HOST:/ /mnt/x
 sudo mount -t nfs -o vers=4.1,port=2049,proto=tcp,sec=sys HOST:/ /mnt/x
 sudo mount -t nfs -o vers=4.0,port=2049,proto=tcp,sec=sys HOST:/ /mnt/x
 sudo mount -t nfs \
@@ -66,7 +67,7 @@ mount_nfs -3 -T HOST:/ /mnt/x           # DragonFly
 | `-port`     | `2049`    | TCP port to listen on                      |
 | `-bind`     | `0.0.0.0` | bind address                               |
 | `-ro`       | off       | export read-only                           |
-| `-vers`     | all       | serve only one major version: `3` or `4`   |
+| `-vers`     | all       | serve only one major version: `3` or `4` (4 = 4.0/4.1/4.2) |
 | `-lease`    | `90`      | NFSv4 lease time (seconds)                 |
 | `-anonuid`  | `65534`   | uid reported/used for anonymous access     |
 | `-anongid`  | `65534`   | gid reported/used for anonymous access     |
@@ -123,6 +124,16 @@ unprivileged on a port >= 1024.
   owner seqids per the spec. Fore channel only: no backchannel, so no
   delegations are ever granted (the server never sets CONN_BACK_CHAN);
   pNFS/layout ops, SSV, and RPCSEC_GSS answer NFS4ERR_NOTSUPP.
+- NFSv4.2 (RFC 7862) on the same session layer. Every 4.2 feature is
+  OPTIONAL, so this is the profile the local filesystem can back
+  honestly: **SEEK** (sparse-file SEEK_DATA/SEEK_HOLE, with the virtual
+  hole at EOF and NXIO past it), **ALLOCATE** (posix_fallocate),
+  **DEALLOCATE** (real hole punching via fallocate(2) on Linux, zero-fill
+  elsewhere) and **intra-server COPY** (synchronous, so no OFFLOAD
+  polling). CLONE, READ_PLUS, WRITE_SAME, IO_ADVISE, inter-server COPY,
+  the OFFLOAD_* ops and the 4.2 attributes (clone_blksize, sec_label,
+  change_attr_type, ...) answer NFS4ERR_NOTSUPP -- which the spec allows
+  for all of them, and Linux clients fall back transparently.
 - Attributes: 41 fattr4 attributes incl. mode/owner/group/times/space/statfs.
 - An open-file descriptor cache, so streams of READ/WRITE ops reuse one
   descriptor instead of open/close per RPC (the dominant write cost).
@@ -131,14 +142,16 @@ unprivileged on a port >= 1024.
   Windows), symlink-privilege probe.
 
 Verified end to end against the Linux kernel client (see `test/e2e.sh`,
-49 checks: vers=4.0 mount, read/write, 8 MiB checksum round-trip,
+60 checks: vers=4.0 mount, read/write, 8 MiB checksum round-trip,
 chmod/chown/truncate/mtime, rename incl. directory rename, symlink/
-hardlink, flock contention, 300-entry readdir, statfs -- then vers=3 and
-vers=4.1 re-mounts exercising the same core paths, and a `-pmap` leg in a
-private network namespace where the client mounts v3 with no port options,
-resolving everything through the built-in portmapper). Loopback throughput
-on a dev machine: ~266 MB/s write, ~168 MB/s read -- well above gigabit
-line rate.
+hardlink, flock contention, 300-entry readdir, statfs -- then vers=3,
+vers=4.1 and vers=4.2 re-mounts exercising the same core paths, with the
+4.2 leg driving the new operations through real syscalls (`fallocate`,
+`fallocate -p`, `lseek(SEEK_DATA/SEEK_HOLE)`, `copy_file_range`), and a
+`-pmap` leg in a private network namespace where the client mounts v3
+with no port options, resolving everything through the built-in
+portmapper). Loopback throughput on a dev machine: ~266 MB/s write,
+~168 MB/s read -- well above gigabit line rate.
 
 ## Testing
 
@@ -150,17 +163,20 @@ python3 test/rpcsmoke.py    # protocol-level smoke; no privileges needed,
 ```
 
 `test/rpcsmoke.py` starts the server in-process and speaks raw NFSv3,
-NFSv4.0 and NFSv4.1 (RPC NULL, PUTROOTFH/LOOKUP/READ/WRITE/CREATE/
-SETATTR/REMOVE, the EXCHANGE_ID/CREATE_SESSION/SEQUENCE session flow with
-slot replay, GRACE gating, the current stateid, minor-version rejection,
-illegal opcodes, a full MOUNT3+NFS3 pass: MNT/EXPORT, v3 create/
+NFSv4.0, NFSv4.1 and NFSv4.2 (RPC NULL, PUTROOTFH/LOOKUP/READ/WRITE/
+CREATE/SETATTR/REMOVE, the EXCHANGE_ID/CREATE_SESSION/SEQUENCE session
+flow with slot replay, GRACE gating, the current stateid, minor-version
+rejection, illegal opcodes, the 4.2 SEEK/ALLOCATE/DEALLOCATE/COPY ops
+with their data verified on disk and NOTSUPP for the ops we decline, the
+`-vers` gating, a full MOUNT3+NFS3 pass: MNT/EXPORT, v3 create/
 write/read/setattr/readdirplus/rename/remove/fsinfo, portmapper v2
 GETPORT/DUMP/SET over both TCP and UDP, and the wildcard fallback for a
 denied specific-address bind -- simulated everywhere, and additionally
 exercised against the real macOS privileged-port rule on port 111 when
-running on macOS) -- this is also what CI runs on all three OSes. The Windows-hosted server has additionally
-been verified end to end with a real Linux kernel client (WSL2) including
-chmod/chown persistence into the NTFS ADS sidecar.
+running on macOS) -- this is also what CI runs on all three OSes. The
+Windows-hosted server has additionally been verified end to end with a
+real Linux kernel client (WSL2) including chmod/chown persistence into
+the NTFS ADS sidecar.
 
 ## Protocol conformance (pynfs)
 
@@ -197,10 +213,11 @@ starts passing is reported so the baseline can be tightened.
 python3 tools/gen_constants.py --splice nfsd.py
 ```
 
-reads `spec/rfc7531.txt` / `spec/rfc5662.txt` / `spec/rfc1813.txt` /
-`spec/rfc5531.txt` (verbatim IETF documents, included) and replaces the
-generated block in `nfsd.py`. Names shared across specifications are
-cross-checked for value equality during generation; a mismatch aborts.
+reads the verbatim IETF documents in `spec/` (RFC 7531, 5662, 7863, 1813,
+1833, 5531) and replaces the generated block in `nfsd.py`. Names shared
+across specifications -- every NFSv4 minor version restates the whole XDR
+-- are cross-checked for value equality during generation; a mismatch
+aborts.
 
 ## Design notes
 
@@ -216,7 +233,7 @@ cross-checked for value equality during generation; a mismatch aborts.
 
 ## Known limitations
 
-- NFSv3, NFSv4.0 and NFSv4.1 (no NFSv2, no NFSv4.2). No delegations, no
+- NFSv3, NFSv4.0, NFSv4.1 and NFSv4.2 (no NFSv2). No delegations, no
   Kerberos (AUTH_SYS trusts client-asserted uid/gid, standard LAN model).
 - NFSv3 has no NLM/NSM lock manager: mount with `nolock` (byte-range
   locking works on v4.0/4.1). NFS itself is TCP only; v3 clients either

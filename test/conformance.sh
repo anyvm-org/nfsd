@@ -1,5 +1,6 @@
 #!/bin/bash
-# pynfs NFSv4.0 / NFSv4.1 conformance run with a known-failures baseline.
+# pynfs NFSv4.0 / NFSv4.1 / NFSv4.2 conformance run against a
+# known-failures baseline.
 #
 # Runs the pynfs servertests suite against nfsd.py and compares the set of
 # failing test codes with the per-minor-version baseline file:
@@ -7,7 +8,10 @@
 #   - a baseline entry that now passes is reported (tighten the baseline)
 #
 # usage: bash test/conformance.sh [port]
-# env:   MINOR     (default 0) - 0 runs pynfs nfs4.0, 1 runs pynfs nfs4.1
+# env:   MINOR     (default 0) - 0 = pynfs nfs4.0, 1 = nfs4.1,
+#                  2 = the nfs4.1 suite driven with --minorversion=2, which
+#                  is how pynfs covers 4.2 (same suite, 4.2 compounds, plus
+#                  its own 4.2-specific tests)
 #        PYNFS_DIR (default /tmp/pynfs) - pynfs checkout, cloned if missing
 #        REPO      (default: parent of this script) - nfsd-py checkout
 set +e
@@ -16,7 +20,12 @@ REPO=${REPO:-$(dirname "$HERE")}
 PORT=${1:-12061}
 MINOR=${MINOR:-0}
 PYNFS_DIR=${PYNFS_DIR:-/tmp/pynfs}
-if [ "$MINOR" = "1" ]; then
+if [ "$MINOR" = "2" ]; then
+  SUITE=nfs4.1
+  MINOR_ARGS=--minorversion=2
+  BASELINE="$REPO/test/pynfs42-known-failures.txt"
+  MIN_PASS=100
+elif [ "$MINOR" = "1" ]; then
   SUITE=nfs4.1
   MINOR_ARGS=--minorversion=1
   BASELINE="$REPO/test/pynfs41-known-failures.txt"

@@ -409,10 +409,10 @@ def main():
           and not os.path.exists(os.path.join(export, "subdir")),
           "REMOVE directory")
 
-    # 8. minorversion 2 must be rejected with an empty resarray
-    st, n, up = compound(sock, [op_putrootfh()], minor=2)
+    # 8. minorversion 3 must be rejected with an empty resarray
+    st, n, up = compound(sock, [op_putrootfh()], minor=3)
     check(st == nfsd.NFS4ERR_MINOR_VERS_MISMATCH and n == 0,
-          "minorversion 2 rejected")
+          "minorversion 3 rejected")
 
     # 9. unknown opcode -> OP_ILLEGAL
     bad = nfsd.Packer()
@@ -930,6 +930,143 @@ def main():
                 ps.server_close()
         else:
             print("SKIP: port 111 already in use; macos pmap test skipped")
+
+    # --- NFSv4.2 (RFC 7862): minorversion 2 on the 4.1 session layer -------
+
+    # 37. a 4.2 session, then OPEN+WRITE to seed a file for the space ops
+    st, n, up = compound(sock, [op_exchange_id(b"\x42" * 8, b"smoke42")],
+                         minor=2)
+    check(st == nfsd.NFS4_OK, "4.2 EXCHANGE_ID OK")
+    up.uint32(); up.uint32()
+    cid42 = up.uint64()
+    seq42 = up.uint32()
+    st, n, up = compound(sock, [op_create_session(cid42, seq42)], minor=2)
+    check(st == nfsd.NFS4_OK, "4.2 CREATE_SESSION OK")
+    up.uint32(); up.uint32()
+    sid42 = up.opaque_fixed(nfsd.NFS4_SESSIONID_SIZE)
+    sq = [0]
+
+    def c42(ops):
+        sq[0] += 1
+        return compound(sock, [op_sequence(sid42, sq[0], 0)] + ops, minor=2)
+
+    st, n, up = c42([op_reclaim_complete()])
+    check(st == nfsd.NFS4_OK, "4.2 RECLAIM_COMPLETE OK")
+
+    st, n, up = c42([op_putrootfh(), op_open41_create("file42.bin")])
+    check(st == nfsd.NFS4_OK, "4.2 OPEN create OK")
+    skip_sequence_res(up)
+    up.uint32(); up.uint32()
+    up.uint32(); up.uint32()
+    osid42 = up.opaque_fixed(16)
+
+    st, n, up = c42([op_putrootfh(), op_lookup("file42.bin"),
+                     op_write41(osid42, 0, b"A" * 4096)])
+    check(st == nfsd.NFS4_OK, "4.2 WRITE seed 4096 bytes")
+
+    def op_seek(sid, offset, what):
+        pk = nfsd.Packer()
+        pk.uint32(nfsd.OP_SEEK)
+        pk.raw(sid)
+        pk.uint64(offset)
+        pk.uint32(what)
+        return pk.get()
+
+    def op_allocate(sid, offset, length, opnum=None):
+        pk = nfsd.Packer()
+        pk.uint32(nfsd.OP_ALLOCATE if opnum is None else opnum)
+        pk.raw(sid)
+        pk.uint64(offset)
+        pk.uint64(length)
+        return pk.get()
+
+    # 38. SEEK: data at 0, the virtual hole at EOF, NXIO past EOF
+    st, n, up = c42([op_putrootfh(), op_lookup("file42.bin"),
+                     op_seek(osid42, 0, nfsd.NFS4_CONTENT_DATA)])
+    check(st == nfsd.NFS4_OK, "4.2 SEEK data status OK")
+    skip_sequence_res(up)
+    up.uint32(); up.uint32()
+    up.uint32(); up.uint32()
+    up.uint32(); up.uint32()
+    up.boolean()                         # sr_eof
+    check(up.uint64() == 0, "4.2 SEEK finds data at offset 0")
+
+    st, n, up = c42([op_putrootfh(), op_lookup("file42.bin"),
+                     op_seek(osid42, 0, nfsd.NFS4_CONTENT_HOLE)])
+    check(st == nfsd.NFS4_OK, "4.2 SEEK hole status OK")
+
+    st, n, up = c42([op_putrootfh(), op_lookup("file42.bin"),
+                     op_seek(osid42, 999999, nfsd.NFS4_CONTENT_DATA)])
+    check(st == nfsd.NFS4ERR_NXIO, "4.2 SEEK past EOF -> NXIO")
+
+    # 39. ALLOCATE grows the file; DEALLOCATE zeroes a region
+    st, n, up = c42([op_putrootfh(), op_lookup("file42.bin"),
+                     op_allocate(osid42, 4096, 8192)])
+    check(st == nfsd.NFS4_OK, "4.2 ALLOCATE status OK")
+    check(os.path.getsize(os.path.join(export, "file42.bin")) == 12288,
+          "4.2 ALLOCATE extended the file to 12288")
+
+    st, n, up = c42([op_putrootfh(), op_lookup("file42.bin"),
+                     op_allocate(osid42, 0, 2048, opnum=nfsd.OP_DEALLOCATE)])
+    check(st == nfsd.NFS4_OK, "4.2 DEALLOCATE status OK")
+    with open(os.path.join(export, "file42.bin"), "rb") as f:
+        head = f.read(4096)
+    check(head[:2048] == b"\0" * 2048 and head[2048:] == b"A" * 2048,
+          "4.2 DEALLOCATE zeroed exactly the region")
+
+    # 40. intra-server COPY: SAVEFH source -> PUTFH destination
+    st, n, up = c42([op_putrootfh(), op_open41_create("copy-dst.bin")])
+    check(st == nfsd.NFS4_OK, "4.2 OPEN copy destination")
+    skip_sequence_res(up)
+    up.uint32(); up.uint32()
+    up.uint32(); up.uint32()
+    dsid42 = up.opaque_fixed(16)
+
+    def op_savefh():
+        pk = nfsd.Packer()
+        pk.uint32(nfsd.OP_SAVEFH)
+        return pk.get()
+
+    def op_copy(src_sid, dst_sid, src_off, dst_off, count):
+        pk = nfsd.Packer()
+        pk.uint32(nfsd.OP_COPY)
+        pk.raw(src_sid)
+        pk.raw(dst_sid)
+        pk.uint64(src_off)
+        pk.uint64(dst_off)
+        pk.uint64(count)
+        pk.boolean(True)                 # ca_consecutive
+        pk.boolean(True)                 # ca_synchronous
+        pk.uint32(0)                     # ca_source_server<>: intra-server
+        return pk.get()
+
+    st, n, up = c42([op_putrootfh(), op_lookup("file42.bin"), op_savefh(),
+                     op_putrootfh(), op_lookup("copy-dst.bin"),
+                     op_copy(osid42, dsid42, 2048, 0, 2048)])
+    check(st == nfsd.NFS4_OK, "4.2 COPY status OK")
+    with open(os.path.join(export, "copy-dst.bin"), "rb") as f:
+        check(f.read() == b"A" * 2048, "4.2 COPY moved the right bytes")
+
+    # 41. the optional ops we do not implement answer NOTSUPP, not garbage
+    def op_bare(opnum):
+        pk = nfsd.Packer()
+        pk.uint32(opnum)
+        return pk.get()
+
+    st, n, up = c42([op_putrootfh(), op_bare(nfsd.OP_CLONE)])
+    check(st == nfsd.NFS4ERR_NOTSUPP, "4.2 CLONE -> NOTSUPP")
+    st, n, up = c42([op_putrootfh(), op_bare(nfsd.OP_READ_PLUS)])
+    check(st == nfsd.NFS4ERR_NOTSUPP, "4.2 READ_PLUS -> NOTSUPP")
+    st, n, up = c42([op_putrootfh(), op_bare(nfsd.OP_IO_ADVISE)])
+    check(st == nfsd.NFS4ERR_NOTSUPP, "4.2 IO_ADVISE -> NOTSUPP")
+
+    # 42. a 4.2-only op must not exist in a 4.1 compound (same session:
+    # the minorversion of the compound, not the session, picks the op table)
+    sq[0] += 1
+    st, n, up = compound(sock, [op_sequence(sid42, sq[0], 0),
+                                op_putrootfh(), op_bare(nfsd.OP_SEEK)],
+                         minor=1)
+    check(st == nfsd.NFS4ERR_OP_ILLEGAL, "SEEK in a 4.1 compound -> ILLEGAL")
 
     # --- version gating (-vers 3 / -vers 4) --------------------------------
 

@@ -8,6 +8,9 @@ Sources (downloaded verbatim into spec/):
     4.0 protocol: names already defined by RFC 7531 are checked for value
     equality (a mismatch aborts generation), and only 4.1-new names are
     emitted in the RFC 5662 sections.
+  - RFC 7863: NFSv4.2 XDR description (same "///" format), a superset of
+    4.1 in turn; handled exactly like RFC 5662 -- overlapping names are
+    value-checked, only 4.2-new names are emitted.
   - RFC 5531: ONC RPC v2 protocol specification (msg_type, reply_stat,
     accept_stat, reject_stat, auth_stat, auth_flavor enums).
   - RFC 1813: NFS version 3 protocol. Its XDR is embedded as indented
@@ -276,6 +279,36 @@ def emit():
         for n, v in procs:
             add(n, v, "rfc5662")
 
+    # RFC 7863 (NFSv4.2): same "///" embedding, a superset of 4.1 in turn.
+    x42 = strip_comments(extract_slashed_xdr(load("rfc7863.txt")))
+
+    fresh = [(n, v) for n, v in parse_consts(x42) if n not in seen]
+    if fresh:
+        lines.append("")
+        lines.append("# --- RFC 7863 top-level consts (NFSv4.2-new) ---")
+    for n, v in parse_consts(x42):
+        add(n, v, "rfc7863")
+
+    enums42 = parse_enums(x42)
+    for name, entries in enums42:
+        fresh = [(n, v) for n, v in entries if n not in seen]
+        if fresh:
+            lines.append("")
+            lines.append("# --- RFC 7863 enum %s (NFSv4.2-new members) ---" % name)
+        for n, v in entries:
+            add(n, v, "rfc7863")
+
+    for prog_name, prog_num, vers_name, vers_num, procs in parse_programs(x42):
+        fresh = ([(prog_name, prog_num), (vers_name, vers_num)] + procs)
+        fresh = [(n, v) for n, v in fresh if n not in seen]
+        if fresh:
+            lines.append("")
+            lines.append("# --- RFC 7863 program declaration: %s ---" % prog_name)
+        add(prog_name, prog_num, "rfc7863")
+        add(vers_name, vers_num, "rfc7863")
+        for n, v in procs:
+            add(n, v, "rfc7863")
+
     # RFC 1813 (NFSv3): indented plain-text XDR blocks.
     x3 = strip_comments(clean_rfc1813(load("rfc1813.txt")))
 
@@ -338,13 +371,13 @@ def emit():
         for n, v in entries:
             add(n, v, "rfc5531")
 
-    # Reverse-lookup maps for logging, merged across RFC 7531 + RFC 5662
-    # (RFC 5662's nfs_opnum4/nfsstat4 are supersets covering the 4.1 ops
-    # and errors; identical values dedupe, mismatches abort).
+    # Reverse-lookup maps for logging, merged across RFC 7531 + RFC 5662 +
+    # RFC 7863 (each minor version's nfs_opnum4/nfsstat4 is a superset of
+    # the previous one; identical values dedupe, mismatches abort).
     for enum_name, py_name in (("nfsstat4", "NFSSTAT4_NAMES"),
                                ("nfs_opnum4", "OP_NAMES")):
         merged = {}
-        for name, entries in list(enums4) + list(enums41):
+        for name, entries in list(enums4) + list(enums41) + list(enums42):
             if name == enum_name:
                 for n, v in entries:
                     if v in merged and merged[v] != n:

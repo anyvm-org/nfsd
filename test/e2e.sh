@@ -190,6 +190,60 @@ sudo chmod 0640 "$MNT/w41.txt"
 sudo flock -n -x "$MNT/w41.txt" -c true; check $? "4.1 flock"
 sudo rm "$MNT/w41.txt" "$MNT/rnd41.bin"; check $? "4.1 unlink"
 
+# --- NFSv4.2 re-mount (sessions + the space/copy ops) ---
+sudo umount "$MNT"; check $? "umount before v4.2"
+timeout 30 sudo mount -t nfs \
+  -o "vers=4.2,port=$PORT,proto=tcp,sec=sys,soft,timeo=50,retrans=2" \
+  "127.0.0.1:/" "$MNT"
+check $? "mount vers=4.2"
+grep " $(echo "$MNT" | sed 's/[.[\*^$]/\\&/g') " /proc/mounts \
+  | grep -q "vers=4.2"; check $? "negotiated vers=4.2"
+[ "$(cat "$MNT/hello.txt" 2>/dev/null)" = "hello from nfsd.py" ]
+check $? "4.2 read"
+echo "via 4.2" | sudo tee "$MNT/w42.txt" > /dev/null
+[ "$(cat "$EXP/w42.txt" 2>/dev/null)" = "via 4.2" ]; check $? "4.2 write"
+# fallocate(1) drives the ALLOCATE op
+sudo fallocate -l 65536 "$MNT/alloc42.bin" 2>/dev/null
+[ "$(stat -c %s "$EXP/alloc42.bin" 2>/dev/null)" = "65536" ]
+check $? "4.2 fallocate -> ALLOCATE"
+# punch a hole: DEALLOCATE (region must read back as zeros)
+sudo dd if=/dev/zero of="$MNT/hole42.bin" bs=4096 count=4 status=none
+sudo bash -c "printf 'XXXX' | dd of='$MNT/hole42.bin' bs=1 seek=0 conv=notrunc status=none"
+sudo fallocate -p -o 0 -l 4096 "$MNT/hole42.bin" 2>/dev/null
+check $? "4.2 fallocate -p -> DEALLOCATE"
+[ "$(sudo head -c 4 "$MNT/hole42.bin" | tr -d '\0' | wc -c)" = "0" ]
+check $? "4.2 punched region reads as zeros"
+# lseek(SEEK_DATA/SEEK_HOLE) drives SEEK
+sudo python3 -c "
+import os, sys
+fd = os.open('$MNT/hole42.bin', os.O_RDONLY)
+try:
+    d = os.lseek(fd, 0, os.SEEK_DATA)
+    h = os.lseek(fd, 0, os.SEEK_HOLE)
+    sys.exit(0 if d >= 0 and h >= 0 else 1)
+finally:
+    os.close(fd)
+" 2>/dev/null
+check $? "4.2 SEEK_DATA/SEEK_HOLE over NFS"
+# copy_file_range drives the COPY op (kernel may fall back to r/w; the
+# check is that the data lands, not which path it took)
+sudo python3 -c "
+import os
+s = os.open('$MNT/w42.txt', os.O_RDONLY)
+d = os.open('$MNT/copy42.txt', os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+try:
+    os.copy_file_range(s, d, 8)
+finally:
+    os.close(s); os.close(d)
+" 2>/dev/null
+[ "$(cat "$EXP/copy42.txt" 2>/dev/null)" = "via 4.2" ]
+check $? "4.2 copy_file_range -> COPY"
+sudo rm "$MNT/w42.txt"
+sudo rm "$MNT/alloc42.bin"
+sudo rm "$MNT/hole42.bin"
+sudo rm "$MNT/copy42.txt"
+check $? "4.2 cleanup"
+
 # --- portmapper (-pmap): v3 mount with NO port options ---
 # Runs in a private network namespace: the runner's own rpcbind (if any)
 # does not own port 111 there, so nfsd.py -pmap binds the real port 111
