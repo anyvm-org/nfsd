@@ -11,6 +11,11 @@ Sources (downloaded verbatim into spec/):
   - RFC 7863: NFSv4.2 XDR description (same "///" format), a superset of
     4.1 in turn; handled exactly like RFC 5662 -- overlapping names are
     value-checked, only 4.2-new names are emitted.
+  - RFC 8276: extended attributes for NFSv4.2 (same "///" format). This
+    one is an extension rather than a restatement: it does not repeat
+    enum nfsstat4 / nfs_opnum4, but lists the members it adds inside
+    "Following lines are to be added to enum ..." comment blocks, which
+    need their own extraction (parse_rfc8276_enum_additions).
   - RFC 5531: ONC RPC v2 protocol specification (msg_type, reply_stat,
     accept_stat, reject_stat, auth_stat, auth_flavor enums).
   - RFC 1813: NFS version 3 protocol. Its XDR is embedded as indented
@@ -95,6 +100,23 @@ def clean_rfc1813(text):
             continue
         out.append(line)
     return "\n".join(out)
+
+
+def parse_rfc8276_enum_additions(x):
+    """Extract RFC 8276's additions to enum nfsstat4 / nfs_opnum4.
+
+    Unlike the minor-version XDRs, RFC 8276 does not restate those enums.
+    It lists the members it adds inside comment blocks introduced by
+    "Following lines are to be added to enum ...", so they must be read
+    from the raw (not comment-stripped) text. Those blocks hold the only
+    "OP_x = n" / "NFS4ERR_x = n" lines in the document.
+    """
+    return [
+        (n, int(v))
+        for n, v in re.findall(
+            r"^\s*(OP_[A-Z_]+|NFS4ERR_[A-Z0-9_]+)\s*=\s*(\d+)", x, flags=re.M
+        )
+    ]
 
 
 def clean_rfc1833(text):
@@ -308,6 +330,33 @@ def emit():
         add(vers_name, vers_num, "rfc7863")
         for n, v in procs:
             add(n, v, "rfc7863")
+
+    # RFC 8276 (xattrs, an NFSv4.2 extension): consts and the one real
+    # enum come from the comment-stripped text; the ops and errors it adds
+    # to the 4.2 enums live in comment blocks and need the raw text.
+    xx_raw = extract_slashed_xdr(load("rfc8276.txt"))
+    xx = strip_comments(xx_raw)
+
+    lines.append("")
+    lines.append("# --- RFC 8276 consts (xattr extension) ---")
+    for n, v in parse_consts(xx):
+        add(n, v, "rfc8276")
+
+    for name, entries in parse_enums(xx):
+        lines.append("")
+        lines.append("# --- RFC 8276 enum %s ---" % name)
+        for n, v in entries:
+            add(n, v, "rfc8276")
+
+    lines.append("")
+    lines.append("# --- RFC 8276 additions to enum nfsstat4 / nfs_opnum4 ---")
+    xattr_additions = parse_rfc8276_enum_additions(xx_raw)
+    if len(xattr_additions) != 6:
+        raise SystemExit(
+            "rfc8276: expected 4 ops + 2 errors, parsed %d"
+            % len(xattr_additions))
+    for n, v in xattr_additions:
+        add(n, v, "rfc8276")
 
     # RFC 1813 (NFSv3): indented plain-text XDR blocks.
     x3 = strip_comments(clean_rfc1813(load("rfc1813.txt")))

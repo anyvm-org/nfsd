@@ -32,6 +32,8 @@ return NFS4ERR_STALE. AUTH_SYS and AUTH_NONE only.
 """
 
 import argparse
+import base64
+import errno
 import json
 import logging
 import os
@@ -698,6 +700,25 @@ IO_ADVISE4_INIT_PROXIMITY = 10
 # --- RFC 7863 enum nfs_cb_opnum4 (NFSv4.2-new members) ---
 OP_CB_OFFLOAD = 15
 
+# --- RFC 8276 consts (xattr extension) ---
+ACCESS4_XAREAD = 64
+ACCESS4_XAWRITE = 128
+ACCESS4_XALIST = 256
+FATTR4_XATTR_SUPPORT = 82
+
+# --- RFC 8276 enum setxattr_option4 ---
+SETXATTR4_EITHER = 0
+SETXATTR4_CREATE = 1
+SETXATTR4_REPLACE = 2
+
+# --- RFC 8276 additions to enum nfsstat4 / nfs_opnum4 ---
+NFS4ERR_NOXATTR = 10095
+NFS4ERR_XATTR2BIG = 10096
+OP_GETXATTR = 72
+OP_SETXATTR = 73
+OP_LISTXATTRS = 74
+OP_REMOVEXATTR = 75
+
 # --- RFC 1813 sec 2.4 size constants ---
 NFS3_FHSIZE = 64
 NFS3_COOKIEVERFSIZE = 8
@@ -1245,7 +1266,6 @@ _ERRNO_MAP = None
 def oserror_to_stat(e):
     global _ERRNO_MAP
     if _ERRNO_MAP is None:
-        import errno
         _ERRNO_MAP = {
             errno.EPERM: NFS4ERR_PERM,
             errno.ENOENT: NFS4ERR_NOENT,
@@ -2266,6 +2286,119 @@ class SideMeta(object):
 
 
 # ---------------------------------------------------------------------------
+# extended attributes (RFC 8276): the platform's own xattrs on POSIX, the
+# sidecar JSON on Windows
+# ---------------------------------------------------------------------------
+
+# The wire name is mapped into the OS "user." namespace: RFC 8276 sec 3
+# covers "user-managed metadata only", and that is also the only namespace
+# an unprivileged POSIX server may write. The Linux NFS server does the
+# same, so a client's `setfattr -n user.foo` lands on user.foo here.
+XATTR_NS = "user."
+XATTR_VALUE_MAX = 65536          # larger values get NFS4ERR_XATTR2BIG
+
+
+class XattrStore(object):
+    """Backing store for GETXATTR/SETXATTR/LISTXATTRS/REMOVEXATTR.
+
+    POSIX: os.*xattr on the file. Windows: a dict inside the sidecar
+    stream that already carries uid/gid/mode, values base64-encoded so the
+    sidecar stays plain ASCII JSON."""
+
+    def __init__(self, side):
+        self.side = side
+        self.posix = hasattr(os, "getxattr")
+
+    def supported(self, path):
+        """Whether this export can store xattrs (fattr4_xattr_support)."""
+        if self.posix:
+            try:
+                os.listxattr(path)
+                return True
+            except OSError:
+                return False
+        return IS_WINDOWS
+
+    @staticmethod
+    def _osname(name):
+        return XATTR_NS + name
+
+    def _sidecar_map(self, ino, path):
+        return dict(self.side.read(ino, path).get("xattrs", {}))
+
+    def get(self, ino, path, name):
+        if self.posix:
+            try:
+                return os.getxattr(path, self._osname(name))
+            except OSError as e:
+                raise self._map_err(e)
+        m = self._sidecar_map(ino, path)
+        if name not in m:
+            raise NfsErr(NFS4ERR_NOXATTR)
+        return base64.b64decode(m[name])
+
+    def set(self, ino, path, name, value, option):
+        if len(value) > XATTR_VALUE_MAX:
+            raise NfsErr(NFS4ERR_XATTR2BIG)
+        if self.posix:
+            flags = 0
+            if option == SETXATTR4_CREATE:
+                flags = os.XATTR_CREATE
+            elif option == SETXATTR4_REPLACE:
+                flags = os.XATTR_REPLACE
+            try:
+                os.setxattr(path, self._osname(name), value, flags)
+            except OSError as e:
+                raise self._map_err(e)
+            return
+        m = self._sidecar_map(ino, path)
+        if option == SETXATTR4_CREATE and name in m:
+            raise NfsErr(NFS4ERR_EXIST)
+        if option == SETXATTR4_REPLACE and name not in m:
+            raise NfsErr(NFS4ERR_NOXATTR)
+        m[name] = base64.b64encode(value).decode("ascii")
+        self.side.update(ino, path, xattrs=m)
+
+    def remove(self, ino, path, name):
+        if self.posix:
+            try:
+                os.removexattr(path, self._osname(name))
+            except OSError as e:
+                raise self._map_err(e)
+            return
+        m = self._sidecar_map(ino, path)
+        if name not in m:
+            raise NfsErr(NFS4ERR_NOXATTR)
+        m.pop(name)
+        self.side.update(ino, path, xattrs=m)
+
+    def list(self, ino, path):
+        """Every xattr name of the file, namespace prefix stripped."""
+        if self.posix:
+            try:
+                names = os.listxattr(path)
+            except OSError as e:
+                raise self._map_err(e)
+            return sorted(n[len(XATTR_NS):] for n in names
+                          if n.startswith(XATTR_NS))
+        return sorted(self._sidecar_map(ino, path))
+
+    @staticmethod
+    def _map_err(e):
+        no_attr = (getattr(errno, "ENODATA", None),
+                   getattr(errno, "ENOATTR", None))
+        if e.errno in no_attr:
+            return NfsErr(NFS4ERR_NOXATTR)
+        if e.errno == errno.EEXIST:
+            return NfsErr(NFS4ERR_EXIST)
+        if e.errno in (errno.E2BIG, errno.ERANGE):
+            return NfsErr(NFS4ERR_XATTR2BIG)
+        if e.errno == getattr(errno, "EOPNOTSUPP", errno.EINVAL):
+            return NfsErr(NFS4ERR_NOTSUPP)
+        return NfsErr(oserror_to_stat(e))
+
+
+# ---------------------------------------------------------------------------
 # the server
 # ---------------------------------------------------------------------------
 
@@ -2338,6 +2471,8 @@ class NfsServer(object):
         self.cache = FileCache()
         self.state = State(lease)
         self.side = SideMeta(anon_uid, anon_gid)
+        self.xattrs = XattrStore(self.side)
+        self.xattr_ok = self.xattrs.supported(root)
         self.write_verf = os.urandom(8)
         self.symlink_ok = self._probe_symlink()
         self.excl_verfs = {}
@@ -2358,13 +2493,19 @@ class NfsServer(object):
         self.owner_major = b"nfsd.py-" + os.urandom(8)
         self.supported_attrs = sorted(ATTR_ENCODERS) + [
             FATTR4_TIME_ACCESS_SET, FATTR4_TIME_MODIFY_SET]
+        # attributes newer than 4.0 are added back per minor version below
         self.supported_attrs.remove(FATTR4_SUPPATTR_EXCLCREAT)
+        self.supported_attrs.remove(FATTR4_XATTR_SUPPORT)
         self.supported_attrs41 = sorted(
             self.supported_attrs + [FATTR4_SUPPATTR_EXCLCREAT])
         # NFSv4.2 adds no REQUIRED attribute we do not already have: every
         # 4.2 attribute (clone_blksize, space_freed, change_attr_type,
-        # sec_label, ...) is OPTIONAL (RFC 7862 sec 12) and unsupported
-        self.supported_attrs42 = self.supported_attrs41
+        # sec_label, ...) is OPTIONAL (RFC 7862 sec 12) and unsupported.
+        # xattr_support (RFC 8276 sec 8.2.1) is the one 4.2-era attribute
+        # we do implement, and only when the export can store xattrs.
+        self.supported_attrs42 = sorted(
+            self.supported_attrs41
+            + ([FATTR4_XATTR_SUPPORT] if self.xattr_ok else []))
         # attrs a client may set in an EXCLUSIVE4_1 create (cva_attrs);
         # time_access_set/time_modify_set are excluded (RFC 5661 sec 18.16.3)
         self.exclcreat_attrs = [
@@ -2472,10 +2613,18 @@ class NfsServer(object):
         return True
 
     # -- fattr4 encoding -----------------------------------------------------
+    def supported_for(self, minor):
+        """The supported_attrs bitmap of a given minor version."""
+        if minor >= 2:
+            return self.supported_attrs42
+        if minor == 1:
+            return self.supported_attrs41
+        return self.supported_attrs
+
     def encode_fattr(self, ino, path, st, want, minor=0):
         """Return fattr4 bytes (bitmap + attrlist) for requested attrs."""
-        avail = [a for a in want if a in ATTR_ENCODERS
-                 and (minor or a != FATTR4_SUPPATTR_EXCLCREAT)]
+        offered = frozenset(self.supported_for(minor))
+        avail = [a for a in want if a in ATTR_ENCODERS and a in offered]
         vals = Packer()
         src = _AttrSrc(self, ino, path, st, minor)
         for a in avail:
@@ -3046,6 +3195,13 @@ class NfsServer(object):
         ops[OP_ALLOCATE] = self.op_allocate
         ops[OP_DEALLOCATE] = self.op_deallocate
         ops[OP_COPY] = self.op_copy
+        # RFC 8276 extended attributes: an optional extension of 4.2, only
+        # offered when the export can actually store them
+        if self.xattr_ok:
+            ops[OP_GETXATTR] = self.op_getxattr
+            ops[OP_SETXATTR] = self.op_setxattr
+            ops[OP_LISTXATTRS] = self.op_listxattrs
+            ops[OP_REMOVEXATTR] = self.op_removexattr
         return ops
 
     def op_access(self, ctx, up):
@@ -3073,6 +3229,14 @@ class NfsServer(object):
             access = ((ACCESS4_READ if r_ok else 0)
                       | (ACCESS4_EXECUTE if x_ok else 0)
                       | ((ACCESS4_MODIFY | ACCESS4_EXTEND) if w_ok else 0))
+        if ctx.minor >= 2 and self.xattr_ok and not statmod.S_ISLNK(st.st_mode):
+            # RFC 8276 sec 8.5: the xattr access rights. Access to the
+            # "user." namespace is governed by the file's own permissions
+            # (sec 3), so they follow the read/write bits. A client that
+            # does not see XAWRITE here will not even send SETXATTR.
+            supported |= ACCESS4_XAREAD | ACCESS4_XAWRITE | ACCESS4_XALIST
+            access |= ((ACCESS4_XAREAD | ACCESS4_XALIST) if r_ok else 0)
+            access |= ACCESS4_XAWRITE if w_ok else 0
         pk = Packer()
         pk.uint32(NFS4_OK)
         pk.uint32(supported & want)
@@ -3439,14 +3603,14 @@ class NfsServer(object):
     def _verify_common(self, ctx, up):
         bits = unpack_bitmap(up)
         theirs = up.opaque()
+        offered = frozenset(self.supported_for(ctx.minor))
         for a in bits:
             if a in (FATTR4_TIME_ACCESS_SET, FATTR4_TIME_MODIFY_SET,
                      FATTR4_RDATTR_ERROR):
                 raise NfsErr(NFS4ERR_INVAL)
-            if a not in ATTR_ENCODERS:
+            if a not in ATTR_ENCODERS or a not in offered:
+                # unknown, or newer than this compound's minor version
                 raise NfsErr(NFS4ERR_ATTRNOTSUPP)
-            if a == FATTR4_SUPPATTR_EXCLCREAT and not ctx.minor:
-                raise NfsErr(NFS4ERR_ATTRNOTSUPP)   # 4.1-only attribute
         ino = ctx.need_cfh()
         path = self.path_of(ino)
         st = self.lstat(path)
@@ -4276,7 +4440,6 @@ class NfsServer(object):
                 found = FileCache.lseek(e, offset, whence)
                 eof = False
             except OSError as err:
-                import errno
                 if err.errno != errno.ENXIO:
                     raise NfsErr(oserror_to_stat(err))
                 # ENXIO from SEEK_DATA: no data after offset -> sr_eof
@@ -4375,6 +4538,97 @@ class NfsServer(object):
         # copy_requirements4: we always copy consecutively and synchronously
         pk.boolean(True)                 # cr_consecutive
         pk.boolean(True)                 # cr_synchronous
+        return pk.get()
+
+    # -- extended attributes (RFC 8276 sec 8.4), an NFSv4.2 extension ------
+
+    def _xattr_target(self, ctx, writing):
+        """CURRENT_FH of an xattr op, plus its pre-op change id."""
+        ino = ctx.need_cfh()
+        path = self.path_of(ino)
+        st = self.lstat(path)
+        if statmod.S_ISLNK(st.st_mode):
+            # xattrs are looked up on the symlink itself, which no POSIX
+            # user namespace allows
+            raise NfsErr(NFS4ERR_WRONG_TYPE)
+        if writing and self.read_only:
+            raise NfsErr(NFS4ERR_ROFS)
+        return ino, path, self.change_of(st)
+
+    def _xattr_change_info(self, pk, path, before):
+        pk.boolean(False)                # not atomic with the operation
+        pk.uint64(before)
+        pk.uint64(self.dir_cinfo(path))
+
+    @staticmethod
+    def _xattr_name(up):
+        name = up.string(NFS4_OPAQUE_LIMIT)
+        if not name:
+            raise NfsErr(NFS4ERR_INVAL)
+        return name
+
+    def op_getxattr(self, ctx, up):
+        name = self._xattr_name(up)
+        ino, path, _ = self._xattr_target(ctx, False)
+        value = self.xattrs.get(ino, path, name)
+        pk = Packer()
+        pk.uint32(NFS4_OK)
+        pk.opaque(value)
+        return pk.get()
+
+    def op_setxattr(self, ctx, up):
+        option = up.uint32()
+        if option not in (SETXATTR4_EITHER, SETXATTR4_CREATE,
+                          SETXATTR4_REPLACE):
+            raise NfsErr(NFS4ERR_INVAL)
+        name = self._xattr_name(up)
+        value = up.opaque()
+        ino, path, before = self._xattr_target(ctx, True)
+        self.xattrs.set(ino, path, name, value, option)
+        pk = Packer()
+        pk.uint32(NFS4_OK)
+        self._xattr_change_info(pk, path, before)
+        return pk.get()
+
+    def op_removexattr(self, ctx, up):
+        name = self._xattr_name(up)
+        ino, path, before = self._xattr_target(ctx, True)
+        self.xattrs.remove(ino, path, name)
+        pk = Packer()
+        pk.uint32(NFS4_OK)
+        self._xattr_change_info(pk, path, before)
+        return pk.get()
+
+    def op_listxattrs(self, ctx, up):
+        cookie = up.uint64()
+        maxcount = up.uint32()
+        ino, path, _ = self._xattr_target(ctx, False)
+        names = self.xattrs.list(ino, path)
+        if cookie > len(names):
+            raise NfsErr(NFS4ERR_BAD_COOKIE)
+        body = Packer()
+        # cookie(8) + name count(4) + eof(4)
+        used = 16
+        emitted = 0
+        eof = True
+        for i in range(int(cookie), len(names)):
+            nb = Packer()
+            nb.string(names[i])
+            b = nb.get()
+            if used + len(b) > maxcount:
+                if not emitted:
+                    raise NfsErr(NFS4ERR_TOOSMALL)
+                eof = False
+                break
+            body.raw(b)
+            used += len(b)
+            emitted += 1
+        pk = Packer()
+        pk.uint32(NFS4_OK)
+        pk.uint64(int(cookie) + emitted)  # lxr_cookie: resume point
+        pk.uint32(emitted)
+        pk.raw(body.get())
+        pk.boolean(eof)
         return pk.get()
 
     def op_setclientid(self, ctx, up):
@@ -5330,14 +5584,19 @@ def _build_attr_encoders():
 
     @reg(FATTR4_SUPPORTED_ATTRS)
     def _supported(src, pk):
-        pk.raw(pack_bitmap(src.srv.supported_attrs41 if src.minor
-                           else src.srv.supported_attrs))
+        pk.raw(pack_bitmap(src.srv.supported_for(src.minor)))
 
     @reg(FATTR4_SUPPATTR_EXCLCREAT)
     def _exclcreat(src, pk):
         # NFSv4.1 REQUIRED attr (RFC 5661 sec 5.8.1.14): attrs a client may
         # set in an EXCLUSIVE4_1 create
         pk.raw(pack_bitmap(src.srv.exclcreat_attrs))
+
+    @reg(FATTR4_XATTR_SUPPORT)
+    def _xattr_support(src, pk):
+        # RFC 8276 sec 8.2.1: does this object support extended attributes
+        pk.boolean(src.srv.xattr_ok
+                   and not statmod.S_ISLNK(src.st.st_mode))
 
     @reg(FATTR4_TYPE)
     def _type(src, pk):

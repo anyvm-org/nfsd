@@ -1060,6 +1060,145 @@ def main():
     st, n, up = c42([op_putrootfh(), op_bare(nfsd.OP_IO_ADVISE)])
     check(st == nfsd.NFS4ERR_NOTSUPP, "4.2 IO_ADVISE -> NOTSUPP")
 
+    # --- extended attributes (RFC 8276) -----------------------------------
+
+    def op_getxattr(name):
+        pk = nfsd.Packer()
+        pk.uint32(nfsd.OP_GETXATTR)
+        pk.string(name)
+        return pk.get()
+
+    def op_setxattr(option, name, value):
+        pk = nfsd.Packer()
+        pk.uint32(nfsd.OP_SETXATTR)
+        pk.uint32(option)
+        pk.string(name)
+        pk.opaque(value)
+        return pk.get()
+
+    def op_removexattr(name):
+        pk = nfsd.Packer()
+        pk.uint32(nfsd.OP_REMOVEXATTR)
+        pk.string(name)
+        return pk.get()
+
+    def op_listxattrs(cookie, maxcount):
+        pk = nfsd.Packer()
+        pk.uint32(nfsd.OP_LISTXATTRS)
+        pk.uint64(cookie)
+        pk.uint32(maxcount)
+        return pk.get()
+
+    def xa_file(ops):
+        return [op_putrootfh(), op_lookup("file42.bin")] + ops
+
+    def getattr_bitmap(up_):
+        """Decode a GETATTR result into (returned-bitmap, values-reader)."""
+        nw_ = up_.uint32()
+        words_ = [up_.uint32() for _ in range(nw_)]
+        return words_, nfsd.Unpacker(up_.opaque())
+
+    def has_attr(words_, attr):
+        w, b = divmod(attr, 32)
+        return len(words_) > w and bool(words_[w] & (1 << b))
+
+    # 43. xattr_support is a 4.2 attribute: returned there, absent in 4.0,
+    # and listed in the 4.2 supported_attrs bitmap
+    st, n, up = c42([op_putrootfh(),
+                     op_getattr([nfsd.FATTR4_SUPPORTED_ATTRS,
+                                 nfsd.FATTR4_XATTR_SUPPORT])])
+    check(st == nfsd.NFS4_OK, "4.2 GETATTR xattr_support OK")
+    skip_sequence_res(up)
+    up.uint32(); up.uint32()             # PUTROOTFH
+    up.uint32(); up.uint32()             # GETATTR opnum + status
+    words, vals = getattr_bitmap(up)
+    check(has_attr(words, nfsd.FATTR4_XATTR_SUPPORT),
+          "4.2 GETATTR returns xattr_support")
+    nsupp = vals.uint32()
+    supp = [vals.uint32() for _ in range(nsupp)]
+    check(has_attr(supp, nfsd.FATTR4_XATTR_SUPPORT),
+          "4.2 supported_attrs advertises xattr_support")
+    check(vals.boolean(), "4.2 xattr_support is TRUE")
+
+    st, n, up = compound(sock, [op_putrootfh(),
+                                op_getattr([nfsd.FATTR4_SUPPORTED_ATTRS,
+                                            nfsd.FATTR4_XATTR_SUPPORT])])
+    check(st == nfsd.NFS4_OK, "4.0 GETATTR still OK")
+    up.uint32(); up.uint32()             # PUTROOTFH
+    up.uint32(); up.uint32()             # GETATTR
+    words0, vals0 = getattr_bitmap(up)
+    check(not has_attr(words0, nfsd.FATTR4_XATTR_SUPPORT),
+          "4.0 GETATTR does not return xattr_support")
+    nsupp0 = vals0.uint32()
+    supp0 = [vals0.uint32() for _ in range(nsupp0)]
+    check(not has_attr(supp0, nfsd.FATTR4_XATTR_SUPPORT),
+          "4.0 supported_attrs omits xattr_support")
+
+    # 44. GETXATTR of a missing key -> NOXATTR
+    st, n, up = c42(xa_file([op_getxattr("user.attr1")]))
+    check(st == nfsd.NFS4ERR_NOXATTR, "xattr GETXATTR missing -> NOXATTR")
+
+    # 45. SETXATTR(CREATE) then GETXATTR round-trip
+    st, n, up = c42(xa_file([op_setxattr(nfsd.SETXATTR4_CREATE,
+                                         "user.attr1", b"value1")]))
+    check(st == nfsd.NFS4_OK, "xattr SETXATTR create OK")
+    st, n, up = c42(xa_file([op_getxattr("user.attr1")]))
+    check(st == nfsd.NFS4_OK, "xattr GETXATTR OK")
+    skip_sequence_res(up)
+    up.uint32(); up.uint32()
+    up.uint32(); up.uint32()
+    up.uint32(); up.uint32()
+    check(up.opaque() == b"value1", "xattr GETXATTR returns the value")
+
+    # 46. CREATE of an existing key -> EXIST; REPLACE of a missing -> NOXATTR
+    st, n, up = c42(xa_file([op_setxattr(nfsd.SETXATTR4_CREATE,
+                                         "user.attr1", b"other")]))
+    check(st == nfsd.NFS4ERR_EXIST, "xattr SETXATTR create existing -> EXIST")
+    st, n, up = c42(xa_file([op_setxattr(nfsd.SETXATTR4_REPLACE,
+                                         "user.nope", b"x")]))
+    check(st == nfsd.NFS4ERR_NOXATTR,
+          "xattr SETXATTR replace missing -> NOXATTR")
+
+    # 47. REPLACE and EITHER both update
+    st, n, up = c42(xa_file([op_setxattr(nfsd.SETXATTR4_REPLACE,
+                                         "user.attr1", b"value2")]))
+    check(st == nfsd.NFS4_OK, "xattr SETXATTR replace OK")
+    st, n, up = c42(xa_file([op_setxattr(nfsd.SETXATTR4_EITHER,
+                                         "user.attr2", b"v2")]))
+    check(st == nfsd.NFS4_OK, "xattr SETXATTR either creates")
+
+    # 48. LISTXATTRS lists both keys with eof
+    st, n, up = c42(xa_file([op_listxattrs(0, 8192)]))
+    check(st == nfsd.NFS4_OK, "xattr LISTXATTRS OK")
+    skip_sequence_res(up)
+    up.uint32(); up.uint32()
+    up.uint32(); up.uint32()
+    up.uint32(); up.uint32()
+    up.uint64()                          # lxr_cookie
+    cnt = up.uint32()
+    listed = [up.string() for _ in range(cnt)]
+    check(up.boolean(), "xattr LISTXATTRS eof set")
+    check(sorted(listed) == ["user.attr1", "user.attr2"],
+          "xattr LISTXATTRS lists both keys")
+
+    # 49. REMOVEXATTR, then it is gone; removing again -> NOXATTR
+    st, n, up = c42(xa_file([op_removexattr("user.attr2")]))
+    check(st == nfsd.NFS4_OK, "xattr REMOVEXATTR OK")
+    st, n, up = c42(xa_file([op_removexattr("user.attr2")]))
+    check(st == nfsd.NFS4ERR_NOXATTR, "xattr REMOVEXATTR again -> NOXATTR")
+
+    # 50. a too-small maxcount that cannot hold one name -> TOOSMALL
+    st, n, up = c42(xa_file([op_listxattrs(0, 8)]))
+    check(st == nfsd.NFS4ERR_TOOSMALL, "xattr LISTXATTRS tiny -> TOOSMALL")
+
+    # 51. the xattr ops are 4.2-only
+    st, n, up = compound(sock, [op_sequence(sid42, sq[0] + 1, 0),
+                                op_putrootfh(), op_getxattr("user.attr1")],
+                         minor=1)
+    sq[0] += 1
+    check(st == nfsd.NFS4ERR_OP_ILLEGAL,
+          "GETXATTR in a 4.1 compound -> ILLEGAL")
+
     # 42. a 4.2-only op must not exist in a 4.1 compound (same session:
     # the minorversion of the compound, not the session, picks the op table)
     sq[0] += 1

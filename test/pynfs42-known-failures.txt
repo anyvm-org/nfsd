@@ -1,0 +1,35 @@
+# Known pynfs NFSv4.2 servertests failures for nfsd.py.
+#
+# This is the pynfs nfs4.1 suite driven with --minorversion=2: the 4.1
+# tests re-run as 4.2 compounds, plus the 4.2-specific ones (including the
+# RFC 8276 xattr tests, which nfsd.py implements).
+#
+# Standing: 186 passed / 12 failed / 0 skipped of 198 selected
+# (pynfs master, 2026-07-15). The gap is identical to the 4.1 one -- see
+# test/pynfs41-known-failures.txt -- because everything 4.2 adds on top of
+# 4.1 either works or is a feature the spec lets a server decline.
+#
+# test/conformance.sh (MINOR=2) fails CI when a test NOT in this list
+# fails (regression), and prints a note when a listed test starts passing
+# (tighten this list by removing it).
+
+# delegations: granting one requires a backchannel to recall it with,
+# and nfsd.py runs fore-channel only by design
+DELEG1
+DELEG2
+DELEG3
+DELEG5
+DELEG6
+DELEG7
+DELEG8
+DELEG23
+DELEG26
+
+# delegation callback tests also needing FATTR4_OPEN_ARGUMENTS (an
+# attribute newer than RFC 5661/5662/7862)
+DELEG24
+DELEG25
+
+# pynfs's own XDR library cannot encode the undefined opnum 0 this test
+# wants to send; the request never reaches the server
+COMP5

@@ -238,6 +238,31 @@ finally:
 " 2>/dev/null
 [ "$(cat "$EXP/copy42.txt" 2>/dev/null)" = "via 4.2" ]
 check $? "4.2 copy_file_range -> COPY"
+# extended attributes (RFC 8276): setfattr(1) needs the attr package, so
+# drive the syscalls from python instead
+sudo python3 -c "
+import os, sys
+p = '$MNT/w42.txt'
+os.setxattr(p, 'user.smoke', b'xattr-value')
+if os.getxattr(p, 'user.smoke') != b'xattr-value':
+    sys.exit(1)
+if 'user.smoke' not in os.listxattr(p):
+    sys.exit(2)
+os.removexattr(p, 'user.smoke')
+if 'user.smoke' in os.listxattr(p):
+    sys.exit(3)
+" 2>/dev/null
+check $? "4.2 xattr set/get/list/remove over NFS"
+# the value must land in a real xattr on the exported file
+sudo python3 -c "
+import os
+os.setxattr('$MNT/w42.txt', 'user.persist', b'v')
+"
+[ "$(python3 -c "
+import os
+print(os.getxattr('$EXP/w42.txt', 'user.persist').decode())
+" 2>/dev/null)" = "v" ]
+check $? "4.2 xattr visible on the exported file"
 sudo rm "$MNT/w42.txt"
 sudo rm "$MNT/alloc42.bin"
 sudo rm "$MNT/hole42.bin"

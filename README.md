@@ -3,6 +3,7 @@
 [![test](https://github.com/anyvm-org/nfsd/actions/workflows/test.yml/badge.svg)](https://github.com/anyvm-org/nfsd/actions/workflows/test.yml)
 [![pynfs 4.0](https://img.shields.io/badge/pynfs%20NFSv4.0-589%20passed%2C%200%20failed-brightgreen)](test/pynfs-known-failures.txt)
 [![pynfs 4.1](https://img.shields.io/badge/pynfs%20NFSv4.1-172%2F184%20passed-brightgreen)](test/pynfs41-known-failures.txt)
+[![pynfs 4.2](https://img.shields.io/badge/pynfs%20NFSv4.2-186%2F198%20passed-brightgreen)](test/pynfs42-known-failures.txt)
 [![python](https://img.shields.io/badge/python-3.8%2B%20stdlib%20only-blue)](nfsd.py)
 
 A cross-platform, **user-space NFSv3 / NFSv4.0 / NFSv4.1 / NFSv4.2 server
@@ -134,6 +135,14 @@ unprivileged on a port >= 1024.
   the OFFLOAD_* ops and the 4.2 attributes (clone_blksize, sec_label,
   change_attr_type, ...) answer NFS4ERR_NOTSUPP -- which the spec allows
   for all of them, and Linux clients fall back transparently.
+- Extended attributes (RFC 8276), the 4.2 extension: GETXATTR, SETXATTR
+  (CREATE/REPLACE/EITHER), LISTXATTRS (with cookie continuation) and
+  REMOVEXATTR, plus the `xattr_support` attribute. Names live in the
+  `user.` namespace -- the only one the RFC covers -- so a client's
+  `setfattr -n user.foo` reaches `user.foo` on the exported file. On
+  Windows they are stored in the same NTFS sidecar as uid/gid/mode. An
+  export whose filesystem cannot store xattrs simply does not offer the
+  operations or the attribute.
 - Attributes: 41 fattr4 attributes incl. mode/owner/group/times/space/statfs.
 - An open-file descriptor cache, so streams of READ/WRITE ops reuse one
   descriptor instead of open/close per RPC (the dominant write cost).
@@ -186,6 +195,7 @@ acceptance harness, for both minor versions:
 ```sh
 bash test/conformance.sh              # NFSv4.0 suite, 600+ tests
 MINOR=1 bash test/conformance.sh      # NFSv4.1 suite
+MINOR=2 bash test/conformance.sh      # NFSv4.1 suite as 4.2 + the 4.2 tests
 ```
 
 NFSv4.0 standing: **589 passed / 0 failed / 2 warned / 10 skipped of the
@@ -202,6 +212,11 @@ zero server crashes or hangs. Eleven of the remaining failures need real
 delegations (impossible without a backchannel, see
 `test/pynfs41-known-failures.txt`); the twelfth is a pynfs client-side
 XDR limitation.
+
+NFSv4.2 standing: **186 passed / 12 failed of the 198 selected tests**
+(the 4.1 suite as 4.2 compounds plus the 4.2-specific tests, xattrs
+included), zero server crashes or hangs. The gap is exactly the 4.1 one:
+the same eleven delegation tests and COMP5.
 
 CI treats the per-minor-version known-failures files as baselines: any
 conformance failure not listed there fails the build; a listed test that
