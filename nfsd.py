@@ -854,6 +854,14 @@ MOUNTPROC3_DUMP = 2
 MOUNTPROC3_UMNT = 3
 MOUNTPROC3_UMNTALL = 4
 MOUNTPROC3_EXPORT = 5
+# --- RFC 1094 appendix A: MOUNT protocol v1 ---
+# Served for the GNU Hurd's /hurd/nfs translator, which is hardwired to
+# MOUNT v1 (its --mount-program option aborts with an argp error) while
+# speaking NFSv3 for the file protocol when started with
+# --nfs-program=100003.3. Procedure numbers are identical to v3
+# (MNTPROC_MNT = 1, MNTPROC_UMNT = 3); only the MNT reply differs.
+MOUNT_V1 = 1
+MNT1_FHSIZE = 32                # RFC 1094 appendix A: "const FHSIZE = 32"
 
 # --- RFC 1833 portmapper consts ---
 PMAP_PORT = 111
@@ -1392,6 +1400,10 @@ def fh_bytes(ino):
 
 
 def fh_ino(b):
+    if len(b) == MNT1_FHSIZE and b[8:] == b"\x00" * (MNT1_FHSIZE - 8):
+        # A MOUNT v1 client (the Hurd's /hurd/nfs) echoes back the fixed
+        # 32-byte v1 fhandle mnt1_mnt gave it; the tail is our zero padding.
+        b = b[:8]
     if len(b) != 8:
         raise NfsErr(NFS4ERR_BADHANDLE)
     return struct.unpack(">Q", b)[0]
@@ -2586,6 +2598,7 @@ class NfsServer(object):
         self.ops42 = self._build_ops42()
         self.ops3 = self._build_ops3()
         self.mountops3 = self._build_mountops3()
+        self.mountops1 = self._build_mountops1()
         self.pmapops = self._build_pmapops()
         # ops a 4.1 client may send outside a session, as the only op of the
         # compound (RFC 5661 sec 2.10.2 / 18.34-18.37, 18.50)
@@ -2814,7 +2827,17 @@ class NfsServer(object):
                     kv["gid"] = gid
                 self.side.update(ino, path, **kv)
             else:
-                os.chown(path, uid, gid)
+                try:
+                    os.chown(path, uid, gid)
+                except PermissionError:
+                    # Best-effort: this server squashes ownership (files are
+                    # created as the launching user; anonuid/anongid dress up
+                    # what the guest sees), so a failed chown must not fail
+                    # the whole SETATTR. The Hurd's /hurd/nfs does
+                    # SETATTR(uid=0) right after every CREATE and treats the
+                    # NFS3ERR_PERM as a fatal open error -- every write from
+                    # the guest then dies with EPERM.
+                    pass
             if uid != -1:
                 applied.append(FATTR4_OWNER)
             if gid != -1:
@@ -2924,22 +2947,27 @@ class NfsServer(object):
                 return accepted(GARBAGE_ARGS)
 
         if prog == MOUNT_PROGRAM:
-            # MOUNT v3 (RFC 1813 sec 5) served on the same TCP port, so no
-            # rpcbind is needed: mount with port=/mountport= pointing here
+            # MOUNT v3 (RFC 1813 sec 5) and MOUNT v1 (RFC 1094 appendix A)
+            # served on the same port, so no rpcbind is needed: mount with
+            # port=/mountport= pointing here. v1 exists for the GNU Hurd's
+            # /hurd/nfs translator (see the MOUNT_V1 constant note).
             if 3 not in self.versions:
                 return accepted(PROG_UNAVAIL)
-            if vers != MOUNT_V3:
+            if vers == MOUNT_V3:
+                fn = self.mountops3.get(proc)
+            elif vers == MOUNT_V1:
+                fn = self.mountops1.get(proc)
+            else:
                 pk = Packer()
-                pk.uint32(MOUNT_V3)
+                pk.uint32(MOUNT_V1)
                 pk.uint32(MOUNT_V3)
                 return accepted(PROG_MISMATCH, pk.get())
-            fn = self.mountops3.get(proc)
             if fn is None:
                 return accepted(PROC_UNAVAIL)
             try:
                 return accepted(SUCCESS, fn(Ctx(uid, gid, gids), up))
             except XdrError as e:
-                log.warning("mount3 garbage args: %s", e)
+                log.warning("mount garbage args: %s", e)
                 return accepted(GARBAGE_ARGS)
 
         if prog != NFS4_PROGRAM:          # == NFS_PROGRAM (100003)
@@ -4852,6 +4880,20 @@ class NfsServer(object):
             MOUNTPROC3_EXPORT: self.mnt3_export,
         }
 
+    def _build_mountops1(self):
+        # MOUNT v1 (RFC 1094 appendix A). Same procedure numbers as v3, and
+        # the NULL/DUMP/UMNT/UMNTALL/EXPORT replies are structurally
+        # identical -- only MNT differs (fixed 32-byte fhandle, no auth
+        # flavor list), so everything except MNT reuses the v3 handlers.
+        return {
+            MOUNTPROC3_NULL: self.mnt3_null,
+            MOUNTPROC3_MNT: self.mnt1_mnt,
+            MOUNTPROC3_DUMP: self.mnt3_dump,
+            MOUNTPROC3_UMNT: self.mnt3_umnt,
+            MOUNTPROC3_UMNTALL: self.mnt3_null,
+            MOUNTPROC3_EXPORT: self.mnt3_export,
+        }
+
     # -- portmapper v2 (RFC 1833 sec 3): a static table pointing every
     # program we serve at our own port. PMAPPROC_CALLIT is intentionally
     # absent (broadcast indirect call; unavailable is the safe answer).
@@ -4874,9 +4916,11 @@ class NfsServer(object):
             out.append((NFS_PROGRAM, NFS_V4, IPPROTO_TCP, self.port))
         if 3 in self.versions:
             out.append((MOUNT_PROGRAM, MOUNT_V3, IPPROTO_TCP, self.port))
+            out.append((MOUNT_PROGRAM, MOUNT_V1, IPPROTO_TCP, self.port))
         if 3 in self.versions and self.udp_enabled:
             out.append((NFS_PROGRAM, NFS_V3, IPPROTO_UDP, self.port))
             out.append((MOUNT_PROGRAM, MOUNT_V3, IPPROTO_UDP, self.port))
+            out.append((MOUNT_PROGRAM, MOUNT_V1, IPPROTO_UDP, self.port))
         return tuple(out)
 
     def pmap_null(self, up):
@@ -5104,13 +5148,23 @@ class NfsServer(object):
         dir_ino = self._v3_fh(up)
         name = up.string(MNTPATHLEN)
         dpath = self.dir_path_of(dir_ino)
-        path = self.child_path(dir_ino, name)
-        if not os.path.lexists(path):
-            pk = Packer()
-            pk.uint32(NFS3ERR_NOENT)
-            self._post_attr(pk, dir_ino, dpath)
-            return pk.get()
-        ino = self.imap.get_or_alloc(dir_ino, name)
+        if name in ("", "."):
+            # The Hurd's /hurd/nfs opens its root with LOOKUP(rootfh, "")
+            # right after MOUNT, and "." can arrive from any client. Mirror
+            # Linux knfsd: both resolve to the directory itself instead of
+            # erroring (valid_name would reject them as SERVERFAULT).
+            ino, path = dir_ino, dpath
+        elif name == "..":
+            ino = ROOT_INO if dir_ino == ROOT_INO else self.imap.parent_of(dir_ino)
+            path = self.dir_path_of(ino)
+        else:
+            path = self.child_path(dir_ino, name)
+            if not os.path.lexists(path):
+                pk = Packer()
+                pk.uint32(NFS3ERR_NOENT)
+                self._post_attr(pk, dir_ino, dpath)
+                return pk.get()
+            ino = self.imap.get_or_alloc(dir_ino, name)
         pk = Packer()
         pk.uint32(NFS3_OK)
         pk.opaque(fh_bytes(ino))
@@ -5622,6 +5676,22 @@ class NfsServer(object):
     def mnt3_umnt(self, ctx, up):
         up.string(MNTPATHLEN)            # dirpath
         return b""
+
+    def mnt1_mnt(self, ctx, up):
+        # MOUNT v1 MNT (RFC 1094 appendix A): the fhstatus reply is a status
+        # word followed, on success, by a FIXED 32-byte fhandle -- no length
+        # prefix and no auth_flavors list. The status is a UNIX errno, so
+        # MNT3ERR_NOENT (== ENOENT == 2) is also the correct v1 value. The
+        # 8-byte fh is zero-padded to 32; fh_ino() strips that padding when
+        # the client presents the handle back in NFSv3 calls.
+        dirpath = up.string(MNTPATHLEN)
+        pk = Packer()
+        if dirpath not in ("/", ""):
+            pk.uint32(MNT3ERR_NOENT)
+            return pk.get()
+        pk.uint32(MNT3_OK)
+        pk.raw(fh_bytes(ROOT_INO).ljust(MNT1_FHSIZE, b"\x00"))
+        return pk.get()
 
     def mnt3_export(self, ctx, up):
         pk = Packer()
