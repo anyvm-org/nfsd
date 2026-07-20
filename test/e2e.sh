@@ -168,8 +168,40 @@ n3=$(ls "$MNT" | wc -l)
 sudo rm "$MNT/w3r.txt" "$MNT/rnd3.bin" "$MNT/lnk3" "$MNT/d3/deep.txt"
 sudo rmdir "$MNT/d3"; check $? "v3 unlink + rmdir"
 
-# --- NFSv4.1 (sessions) re-mount ---
-sudo umount "$MNT"; check $? "umount before v4.1"
+# --- NFSv3 over UDP ---
+# MOUNT over UDP works on every kernel; a full proto=udp NFS mount needs a
+# kernel built without CONFIG_NFS_DISABLE_UDP_SUPPORT, so probe and skip.
+sudo umount "$MNT"; check $? "umount before v3-udp"
+timeout 30 sudo mount -t nfs \
+  -o "vers=3,port=$PORT,mountport=$PORT,mountproto=udp,proto=tcp,nolock,soft,timeo=50,retrans=2" \
+  "127.0.0.1:/" "$MNT"
+check $? "mount with mountproto=udp (MOUNT program over UDP)"
+[ "$(cat "$MNT/hello.txt" 2>/dev/null)" = "hello from nfsd.py" ]
+check $? "mountproto=udp read"
+sudo umount "$MNT"
+if timeout 30 sudo mount -t nfs \
+  -o "vers=3,port=$PORT,mountport=$PORT,mountproto=udp,proto=udp,nolock,soft,timeo=50,retrans=2" \
+  "127.0.0.1:/" "$MNT" 2>/dev/null; then
+  grep " $(echo "$MNT" | sed 's/[.[\*^$]/\\&/g') " /proc/mounts \
+    | grep -q "proto=udp"; check $? "negotiated proto=udp"
+  [ "$(cat "$MNT/hello.txt" 2>/dev/null)" = "hello from nfsd.py" ]
+  check $? "v3-udp read"
+  echo "over v3 udp" | sudo tee "$MNT/w3u.txt" > /dev/null
+  [ "$(cat "$EXP/w3u.txt" 2>/dev/null)" = "over v3 udp" ]
+  check $? "v3-udp write"
+  head -c 262144 /dev/urandom > /tmp/nfsdpy-rnd-udp.bin
+  sudo cp /tmp/nfsdpy-rnd-udp.bin "$MNT/rnd3u.bin"
+  au=$(sha256sum /tmp/nfsdpy-rnd-udp.bin | awk '{print $1}')
+  bu=$(sudo sha256sum "$MNT/rnd3u.bin" | awk '{print $1}')
+  [ "$au" = "$bu" ]; check $? "v3-udp 256 KiB sha256 round-trip"
+  sudo rm "$MNT/w3u.txt"
+  sudo rm "$MNT/rnd3u.bin"
+  sudo umount "$MNT"; check $? "umount v3-udp"
+else
+  echo "SKIP: kernel refuses NFS over UDP (CONFIG_NFS_DISABLE_UDP_SUPPORT)"
+fi
+
+# --- NFSv4.1 (sessions) re-mount (the udp section leaves MNT unmounted) ---
 timeout 30 sudo mount -t nfs \
   -o "vers=4.1,port=$PORT,proto=tcp,sec=sys,soft,timeo=50,retrans=2" \
   "127.0.0.1:/" "$MNT"

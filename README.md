@@ -251,10 +251,15 @@ aborts.
 - NFSv3, NFSv4.0, NFSv4.1 and NFSv4.2 (no NFSv2). No delegations, no
   Kerberos (AUTH_SYS trusts client-asserted uid/gid, standard LAN model).
 - NFSv3 has no NLM/NSM lock manager: mount with `nolock` (byte-range
-  locking works on v4.0/4.1). NFS itself is TCP only; v3 clients either
-  pass `port=`/`mountport=` explicitly or use the `-pmap` portmapper
-  (which answers on TCP and UDP but only advertises TCP mappings). The
-  native Windows NFS client is untested.
+  locking works on v4.x). NFSv3 and MOUNT answer over both TCP and UDP
+  (`proto=udp`/`mountproto=udp`; over UDP rtmax/wtmax are capped at
+  32 KiB so a whole reply fits one datagram, and a per-client
+  duplicate-request cache absorbs retransmits). NFSv4 stays TCP-only as
+  RFC 7530 requires. v3 clients either pass `port=`/`mountport=`
+  explicitly or use the `-pmap` portmapper. Note that modern Linux
+  kernels often ship the NFS-over-UDP *client* disabled
+  (`CONFIG_NFS_DISABLE_UDP_SUPPORT`). The native Windows NFS client is
+  untested.
 - NFSv4.1 runs fore channel only (no backchannel / callbacks), no pNFS,
   no SSV state protection, no session persistence.
 - No cross-restart handle persistence; no grace-period reclaim.

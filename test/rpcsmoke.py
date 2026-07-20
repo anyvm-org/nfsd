@@ -775,10 +775,11 @@ def main():
               pmap_mapping(nfsd.MOUNT_PROGRAM, nfsd.MOUNT_V3,
                            nfsd.IPPROTO_TCP))
     check(up.uint32() == port, "PMAP GETPORT mountd/tcp -> server port")
+    # nfs/udp is advertised only once a UDP listener is up (see below)
     up = pmap(nfsd.PMAPPROC_GETPORT,
               pmap_mapping(nfsd.NFS_PROGRAM, nfsd.NFS_V3,
                            nfsd.IPPROTO_UDP))
-    check(up.uint32() == 0, "PMAP GETPORT nfs/udp -> 0 (not registered)")
+    check(up.uint32() == 0, "PMAP GETPORT nfs/udp -> 0 before udp is up")
 
     # 32. DUMP lists the nfs v3/v4 and mountd mappings
     up = pmap(nfsd.PMAPPROC_DUMP)
@@ -804,9 +805,10 @@ def main():
     uport = usrv.server_address[1]
     nfsd._serve_in_thread(usrv)
 
-    def udp_call(proc, body, prog, vers, dport=None):
-        _xid[0] += 1
-        xid = _xid[0]
+    def udp_datagram(proc, body, prog, vers, sys_cred=False, xid=None):
+        if xid is None:
+            _xid[0] += 1
+            xid = _xid[0]
         pk = nfsd.Packer()
         pk.uint32(xid)
         pk.uint32(nfsd.CALL)
@@ -814,15 +816,29 @@ def main():
         pk.uint32(prog)
         pk.uint32(vers)
         pk.uint32(proc)
-        pk.uint32(nfsd.AUTH_NONE)
-        pk.opaque(b"")
+        if sys_cred:
+            cred = nfsd.Packer()
+            cred.uint32(0)
+            cred.string("rpcsmoke")
+            cred.uint32(0)               # uid 0
+            cred.uint32(0)
+            cred.uint32(1)
+            cred.uint32(0)
+            pk.uint32(nfsd.AUTH_SYS)
+            pk.opaque(cred.get())
+        else:
+            pk.uint32(nfsd.AUTH_NONE)
+            pk.opaque(b"")
         pk.uint32(nfsd.AUTH_NONE)
         pk.uint32(0)
         pk.raw(body)
+        return xid, pk.get()
+
+    def udp_send(datagram, xid, dport, accept=None):
         us = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         us.settimeout(10)
         try:
-            us.sendto(pk.get(), ("127.0.0.1", uport if dport is None else dport))
+            us.sendto(datagram, ("127.0.0.1", dport))
             data, _ = us.recvfrom(65536)
         finally:
             us.close()
@@ -832,14 +848,140 @@ def main():
         assert up.uint32() == nfsd.MSG_ACCEPTED, "udp rpc denied"
         up.uint32()
         up.opaque()                      # verifier
-        assert up.uint32() == nfsd.SUCCESS
+        astat = up.uint32()
+        want = nfsd.SUCCESS if accept is None else accept
+        assert astat == want, "udp accept_stat %d (wanted %d)" % (astat, want)
         return up
+
+    def udp_call(proc, body, prog, vers, dport=None, sys_cred=False,
+                 accept=None):
+        xid, dg = udp_datagram(proc, body, prog, vers, sys_cred)
+        return udp_send(dg, xid, uport if dport is None else dport, accept)
 
     up = udp_call(nfsd.PMAPPROC_GETPORT,
                   pmap_mapping(nfsd.NFS_PROGRAM, nfsd.NFS_V3,
                                nfsd.IPPROTO_TCP),
                   nfsd.PMAP_PROG, nfsd.PMAP_VERS)
     check(up.uint32() == port, "PMAP GETPORT over UDP -> server port")
+
+    # --- NFSv3 over UDP (same listener the portmapper test bound) ----------
+
+    srv_nfs.udp_enabled = True
+
+    # 34a. the portmapper now advertises the udp mappings
+    up = pmap(nfsd.PMAPPROC_GETPORT,
+              pmap_mapping(nfsd.NFS_PROGRAM, nfsd.NFS_V3,
+                           nfsd.IPPROTO_UDP))
+    check(up.uint32() == port, "PMAP GETPORT nfs/udp -> port once udp is up")
+
+    # 34b. MOUNT over UDP hands out the root fh
+    pk = nfsd.Packer()
+    pk.string("/")
+    up = udp_call(nfsd.MOUNTPROC3_MNT, pk.get(),
+                  nfsd.MOUNT_PROGRAM, nfsd.MOUNT_V3)
+    check(up.uint32() == nfsd.MNT3_OK, "udp MOUNT3 MNT OK")
+    fh3u = up.opaque()
+    check(fh3u == fh3, "udp MOUNT3 MNT returns the same root fh")
+
+    # 34c. v3 CREATE + WRITE + READ round-trip entirely over UDP
+    pk = nfsd.Packer()
+    pk.opaque(fh3u)
+    pk.string("udp3.txt")
+    pk.uint32(nfsd.UNCHECKED)
+    pk.boolean(True); pk.uint32(0o644)
+    pk.boolean(False); pk.boolean(False); pk.boolean(False)
+    pk.uint32(nfsd.DONT_CHANGE); pk.uint32(nfsd.DONT_CHANGE)
+    up = udp_call(nfsd.NFSPROC3_CREATE, pk.get(),
+                  nfsd.NFS_PROGRAM, nfsd.NFS_V3, sys_cred=True)
+    check(up.uint32() == nfsd.NFS3_OK, "udp NFS3 CREATE OK")
+    check(up.boolean(), "udp NFS3 CREATE returns fh")
+    fh_udp = up.opaque()
+
+    pk = nfsd.Packer()
+    pk.opaque(fh_udp)
+    pk.uint64(0)
+    pk.uint32(8)
+    pk.uint32(nfsd.FILE_SYNC)
+    pk.opaque(b"over udp")
+    up = udp_call(nfsd.NFSPROC3_WRITE, pk.get(),
+                  nfsd.NFS_PROGRAM, nfsd.NFS_V3, sys_cred=True)
+    check(up.uint32() == nfsd.NFS3_OK, "udp NFS3 WRITE OK")
+
+    pk = nfsd.Packer()
+    pk.opaque(fh_udp)
+    pk.uint64(0)
+    pk.uint32(100)
+    up = udp_call(nfsd.NFSPROC3_READ, pk.get(),
+                  nfsd.NFS_PROGRAM, nfsd.NFS_V3, sys_cred=True)
+    check(up.uint32() == nfsd.NFS3_OK, "udp NFS3 READ OK")
+    skip_post_attr(up)
+    up.uint32()
+    up.boolean()
+    check(up.opaque() == b"over udp", "udp NFS3 READ data round-trip")
+
+    # 34d. FSINFO caps rtmax/wtmax to one datagram over UDP only
+    pk = nfsd.Packer()
+    pk.opaque(fh3u)
+    up = udp_call(nfsd.NFSPROC3_FSINFO, pk.get(),
+                  nfsd.NFS_PROGRAM, nfsd.NFS_V3)
+    check(up.uint32() == nfsd.NFS3_OK, "udp NFS3 FSINFO OK")
+    skip_post_attr(up)
+    check(up.uint32() == nfsd.MAXIO_UDP, "udp FSINFO rtmax capped to 32768")
+    pk = nfsd.Packer()
+    pk.opaque(fh3)
+    up = v3(nfsd.NFSPROC3_FSINFO, pk.get())
+    up.uint32()
+    skip_post_attr(up)
+    check(up.uint32() == nfsd.MAXIO, "tcp FSINFO rtmax stays at MAXIO")
+
+    # 34e. a big READ request over UDP is capped, not truncated mid-flight
+    pk = nfsd.Packer()
+    pk.opaque(fh_udp)
+    pk.uint64(0)
+    pk.uint32(1048576)                   # ask 1 MiB; reply must fit
+    up = udp_call(nfsd.NFSPROC3_READ, pk.get(),
+                  nfsd.NFS_PROGRAM, nfsd.NFS_V3, sys_cred=True)
+    check(up.uint32() == nfsd.NFS3_OK, "udp NFS3 READ with huge count OK")
+
+    # 34f. NFSv4 is refused over UDP (RFC 7530 sec 3.1): only v3 offered
+    up = udp_call(nfsd.NFSPROC4_COMPOUND, b"",
+                  nfsd.NFS4_PROGRAM, nfsd.NFS_V4,
+                  accept=nfsd.PROG_MISMATCH)
+    lo_u, hi_u = up.uint32(), up.uint32()
+    check((lo_u, hi_u) == (nfsd.NFS_V3, nfsd.NFS_V3),
+          "udp v4 COMPOUND -> PROG_MISMATCH (3,3)")
+
+    # 34g. the duplicate-request cache replays a retransmitted datagram:
+    # a GUARDED create resent with the SAME xid must answer OK from the
+    # cache, not EXIST
+    pk = nfsd.Packer()
+    pk.opaque(fh3u)
+    pk.string("udp3-drc.txt")
+    pk.uint32(nfsd.GUARDED)
+    pk.boolean(False); pk.boolean(False); pk.boolean(False); pk.boolean(False)
+    pk.uint32(nfsd.DONT_CHANGE); pk.uint32(nfsd.DONT_CHANGE)
+    xid_drc, dg = udp_datagram(nfsd.NFSPROC3_CREATE, pk.get(),
+                               nfsd.NFS_PROGRAM, nfsd.NFS_V3, sys_cred=True)
+    # a real client retransmits from the SAME socket, and the DRC keys on
+    # (source address, xid) -- so both sends must share one socket
+    us_drc = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    us_drc.settimeout(10)
+    try:
+        replies = []
+        for _ in range(2):
+            us_drc.sendto(dg, ("127.0.0.1", uport))
+            data, _ = us_drc.recvfrom(65536)
+            up = nfsd.Unpacker(data)
+            assert up.uint32() == xid_drc
+            up.uint32(); up.uint32(); up.uint32()
+            up.opaque()
+            assert up.uint32() == nfsd.SUCCESS
+            replies.append(up.uint32())
+    finally:
+        us_drc.close()
+    check(replies[0] == nfsd.NFS3_OK, "udp DRC: first GUARDED create OK")
+    check(replies[1] == nfsd.NFS3_OK,
+          "udp DRC: retransmit replayed, not EXIST")
 
     usrv.shutdown()
     usrv.server_close()

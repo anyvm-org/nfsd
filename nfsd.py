@@ -1121,6 +1121,9 @@ FSID_MAJOR = 0x6E667364      # arbitrary but stable fsid ("nfsd")
 SIDE_STREAM = ":nfsd.meta"   # NTFS ADS sidecar for uid/gid/mode on Windows
 MAX_SESSION_SLOTS = 64       # NFSv4.1 fore-channel slot table cap per session
 SLOT_CACHE_LIMIT = 262144    # cache session replies up to this size for replay
+MAXIO_UDP = 32768            # NFSv3-over-UDP rtmax/wtmax: a whole READ reply
+                             # must fit one 64 KiB datagram with headers
+UDP_DRC_SIZE = 512           # cached (addr, xid) replies for UDP retransmits
 
 
 # ---------------------------------------------------------------------------
@@ -2504,7 +2507,7 @@ class XattrStore(object):
 
 class Ctx(object):
     __slots__ = ("cfh", "sfh", "uid", "gid", "gids", "minor", "clientid",
-                 "session", "cur_sid", "saved_sid")
+                 "session", "cur_sid", "saved_sid", "transport")
 
     def __init__(self, uid, gid, gids):
         self.cfh = None
@@ -2517,6 +2520,7 @@ class Ctx(object):
         self.session = None   # NFSv4.1: _Session of this compound
         self.cur_sid = None   # NFSv4.1 current stateid (16.2.3.1.2)
         self.saved_sid = None # NFSv4.1 saved stateid (SAVEFH/RESTOREFH)
+        self.transport = "tcp"  # "tcp" or "udp" (NFSv3 only)
 
     def deref_sid(self, sid):
         """Substitute the current stateid for the (1, 0) special value
@@ -2571,6 +2575,7 @@ class NfsServer(object):
         self.cache = FileCache()
         self.state = State(lease)
         self.side = SideMeta(anon_uid, anon_gid)
+        self.udp_enabled = False     # set once a v3 UDP listener is bound
         self.xattrs = XattrStore(self.side)
         self.xattr_ok = self.xattrs.supported(root)
         self.write_verf = os.urandom(8)
@@ -2839,7 +2844,7 @@ class NfsServer(object):
     # -----------------------------------------------------------------------
     # RPC entry point
     # -----------------------------------------------------------------------
-    def handle_rpc(self, record):
+    def handle_rpc(self, record, transport="tcp"):
         up = Unpacker(record)
         try:
             xid = up.uint32()
@@ -2945,17 +2950,22 @@ class NfsServer(object):
             fn = self.ops3.get(proc)
             if fn is None:
                 return accepted(PROC_UNAVAIL)
+            ctx3 = Ctx(uid, gid, gids)
+            ctx3.transport = transport
             try:
-                body = self.v3_call(fn, proc, Ctx(uid, gid, gids), up)
+                body = self.v3_call(fn, proc, ctx3, up)
             except XdrError as e:
                 log.warning("nfs3 garbage args: %s", e)
                 return accepted(GARBAGE_ARGS)
             return accepted(SUCCESS, body)
-        if vers != NFS_V4 or 4 not in self.versions:
-            # mismatch_info reflects only the versions being served
+        if vers != NFS_V4 or 4 not in self.versions or transport == "udp":
+            # mismatch_info reflects only the versions being served;
+            # NFSv4 is TCP-only (RFC 7530 sec 3.1 requires a transport
+            # with congestion control), so over UDP only v3 is offered
             pk = Packer()
             pk.uint32(NFS_V3 if 3 in self.versions else NFS_V4)
-            pk.uint32(NFS_V4 if 4 in self.versions else NFS_V3)
+            pk.uint32(NFS_V3 if (3 in self.versions and transport == "udp")
+                      else NFS_V4 if 4 in self.versions else NFS_V3)
             return accepted(PROG_MISMATCH, pk.get())
         if proc == NFSPROC4_NULL:
             return accepted(SUCCESS)
@@ -4856,7 +4866,7 @@ class NfsServer(object):
 
     def _pmap_mappings(self):
         """Every (prog, vers, prot, port) tuple this server serves. All
-        programs share the one TCP listener port."""
+        programs share the one listener port, tcp and (for v3) udp."""
         out = []
         if 3 in self.versions:
             out.append((NFS_PROGRAM, NFS_V3, IPPROTO_TCP, self.port))
@@ -4864,6 +4874,9 @@ class NfsServer(object):
             out.append((NFS_PROGRAM, NFS_V4, IPPROTO_TCP, self.port))
         if 3 in self.versions:
             out.append((MOUNT_PROGRAM, MOUNT_V3, IPPROTO_TCP, self.port))
+        if 3 in self.versions and self.udp_enabled:
+            out.append((NFS_PROGRAM, NFS_V3, IPPROTO_UDP, self.port))
+            out.append((MOUNT_PROGRAM, MOUNT_V3, IPPROTO_UDP, self.port))
         return tuple(out)
 
     def pmap_null(self, up):
@@ -5154,7 +5167,8 @@ class NfsServer(object):
         count = up.uint32()
         path = self.path_of(ino)
         self._require_regular(path)
-        count = min(count, MAXIO)
+        # a UDP reply must fit one datagram, whatever count the client asks
+        count = min(count, MAXIO_UDP if ctx.transport == "udp" else MAXIO)
         e = self.cache.get(ino, path, False)
         size = FileCache.size(e)
         if offset >= size:
@@ -5532,14 +5546,16 @@ class NfsServer(object):
     def v3_fsinfo(self, ctx, up):
         ino = self._v3_fh(up)
         path = self.path_of(ino)
+        # over UDP a whole READ/WRITE must fit one 64 KiB datagram
+        io_max = MAXIO_UDP if ctx.transport == "udp" else MAXIO
         pk = Packer()
         pk.uint32(NFS3_OK)
         self._post_attr(pk, ino, path)
-        pk.uint32(MAXIO)                 # rtmax
-        pk.uint32(MAXIO)                 # rtpref
+        pk.uint32(io_max)                # rtmax
+        pk.uint32(io_max)                # rtpref
         pk.uint32(4096)                  # rtmult
-        pk.uint32(MAXIO)                 # wtmax
-        pk.uint32(MAXIO)                 # wtpref
+        pk.uint32(io_max)                # wtmax
+        pk.uint32(io_max)                # wtpref
         pk.uint32(4096)                  # wtmult
         pk.uint32(65536)                 # dtpref
         pk.uint64(NFS4_INT64_MAX)        # maxfilesize
@@ -5962,26 +5978,54 @@ class Server(socketserver.ThreadingTCPServer):
 class UdpHandler(socketserver.BaseRequestHandler):
     """One RPC call per datagram: record marking is for stream transports
     only (RFC 5531 sec 11), so the datagram body IS the RPC message.
-    Exists for the portmapper: BSD mount_nfs sends its GETPORT queries
-    over UDP."""
+    Serves the portmapper (BSD mount_nfs sends GETPORT over UDP) and
+    NFSv3 + MOUNT for clients mounting with proto=udp/mountproto=udp."""
 
     def handle(self):
         data, sock = self.request
+        # duplicate-request cache: UDP clients retransmit, and replaying a
+        # non-idempotent v3 op (REMOVE, exclusive CREATE, RENAME) from the
+        # cache is the only correct answer for a lost reply
+        drc = self.server.drc
+        key = None
+        if len(data) >= 4:
+            key = (self.client_address, data[0:4])
+            with self.server.drc_lock:
+                cached = drc.get(key)
+            if cached is not None and cached[0] == data:
+                self._send(sock, cached[1])
+                return
         try:
-            reply = self.server.nfs.handle_rpc(data)
+            reply = self.server.nfs.handle_rpc(data, transport="udp")
         except Exception as e:
             log.info("udp %s dropped: %s", self.client_address, e)
             return
-        if reply is not None:
-            try:
-                sock.sendto(reply, self.client_address)
-            except OSError as e:
-                log.info("udp reply to %s failed: %s", self.client_address, e)
+        if reply is None:
+            return
+        if key is not None:
+            with self.server.drc_lock:
+                drc[key] = (data, reply)
+                while len(drc) > UDP_DRC_SIZE:
+                    drc.pop(next(iter(drc)))
+        self._send(sock, reply)
+
+    def _send(self, sock, reply):
+        try:
+            sock.sendto(reply, self.client_address)
+        except OSError as e:
+            log.info("udp reply to %s failed: %s", self.client_address, e)
 
 
 class UdpServer(socketserver.ThreadingUDPServer):
     allow_reuse_address = True
     daemon_threads = True
+    # the socketserver default of 8 KiB would truncate a 32 KiB v3 WRITE
+    max_packet_size = 65536
+
+    def __init__(self, *args, **kw):
+        socketserver.ThreadingUDPServer.__init__(self, *args, **kw)
+        self.drc = {}                # (addr, xid) -> (request, reply)
+        self.drc_lock = threading.Lock()
 
 
 def _serve_in_thread(srv):
@@ -6116,14 +6160,35 @@ def main(argv=None):
     srv.server_activate()
     srv.nfs = nfs
 
+    usrv = None
+    if 3 in versions:
+        # NFSv3 + MOUNT also answer over UDP on the same port (classic v3
+        # clients and the BSDs default to it); v4 stays TCP-only
+        try:
+            usrv = UdpServer((args.bind, args.port), UdpHandler,
+                             bind_and_activate=False)
+            if ":" in args.bind:
+                usrv.address_family = socket.AF_INET6
+                usrv.socket = socket.socket(usrv.address_family,
+                                            usrv.socket_type)
+            usrv.server_bind()
+            usrv.server_activate()
+            usrv.nfs = nfs
+            nfs.udp_enabled = True
+        except OSError as e:
+            sys.stdout.write("udp: cannot bind port %d (%s); NFSv3 over"
+                             " udp disabled\n" % (args.port, e))
+            usrv = None
+
     pmap_srvs = []
     if args.pmap:
         pmap_srvs = start_pmap_servers(nfs, args.bind, args.pmap_port)
 
     vlabel = {(3,): "v3", (4,): "v4.0/v4.1/v4.2",
               (3, 4): "v3/v4.0/v4.1/v4.2"}[tuple(sorted(versions))]
-    sys.stdout.write("nfsd.py: exporting %s on port %d (%s, %s)\n"
+    sys.stdout.write("nfsd.py: exporting %s on port %d/tcp%s (%s, %s)\n"
                      % (root, args.port,
+                        "+udp" if usrv is not None else "",
                         "read-only" if args.ro else "read-write", vlabel))
     if 4 in versions:
         sys.stdout.write("mount with: mount -t nfs -o"
@@ -6142,12 +6207,16 @@ def main(argv=None):
     try:
         for ps, _ in pmap_srvs:
             _serve_in_thread(ps)
+        if usrv is not None:
+            _serve_in_thread(usrv)
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         for ps, _ in pmap_srvs:
             ps.server_close()
+        if usrv is not None:
+            usrv.server_close()
         srv.server_close()
         nfs.cache.close_all()
     return 0
