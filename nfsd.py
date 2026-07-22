@@ -1132,6 +1132,12 @@ SLOT_CACHE_LIMIT = 262144    # cache session replies up to this size for replay
 MAXIO_UDP = 32768            # NFSv3-over-UDP rtmax/wtmax: a whole READ reply
                              # must fit one 64 KiB datagram with headers
 UDP_DRC_SIZE = 512           # cached (addr, xid) replies for UDP retransmits
+UDP_DRC_ENTRY_MAX = 8192     # only cache small request/reply pairs: that
+                             # covers every non-idempotent op (CREATE,
+                             # REMOVE, RENAME, ...) while READ/WRITE, which
+                             # are safe to re-execute, stay uncached --
+                             # bounding the cache at ~4 MiB instead of the
+                             # ~48 MiB that 512 full-size datagrams could pin
 
 
 # ---------------------------------------------------------------------------
@@ -5611,7 +5617,8 @@ class NfsServer(object):
         pk.uint32(io_max)                # wtmax
         pk.uint32(io_max)                # wtpref
         pk.uint32(4096)                  # wtmult
-        pk.uint32(65536)                 # dtpref
+        pk.uint32(min(65536, io_max))    # dtpref: READDIR replies must fit
+                                         # one datagram over UDP too
         pk.uint64(NFS4_INT64_MAX)        # maxfilesize
         pk.uint32(0)                     # time_delta seconds
         pk.uint32(1)                     # time_delta nseconds
@@ -6072,7 +6079,7 @@ class UdpHandler(socketserver.BaseRequestHandler):
             return
         if reply is None:
             return
-        if key is not None:
+        if key is not None and len(data) + len(reply) <= UDP_DRC_ENTRY_MAX:
             with self.server.drc_lock:
                 drc[key] = (data, reply)
                 while len(drc) > UDP_DRC_SIZE:
